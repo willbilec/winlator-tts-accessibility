@@ -49,16 +49,13 @@ public class Keyboard {
 
     public void setKeyPress(byte keycode, int keysym) {
         if (isModifierSticky(keycode)) {
-            if (pressedKeys.contains(keycode)) {
-                pressedKeys.remove(keycode);
-                modifiersMask.unset(getModifierFlag(keycode));
-                triggerOnKeyRelease(keycode);
-            }
-            else {
-                pressedKeys.add(keycode);
-                modifiersMask.set(getModifierFlag(keycode));
-                triggerOnKeyPress(keycode, keysym);
-            }
+            if (pressedKeys.contains(keycode)) return;
+            pressedKeys.add(keycode);
+            int flag = getModifierFlag(keycode);
+            // Lock state persists, but each physical tap must have a matching
+            // key release so Wine and accessibility hooks see the full gesture.
+            modifiersMask.set(flag, !modifiersMask.isSet(flag));
+            triggerOnKeyPress(keycode, keysym);
         }
         else if (!pressedKeys.contains(keycode)) {
             pressedKeys.add(keycode);
@@ -68,9 +65,19 @@ public class Keyboard {
     }
 
     public void setKeyRelease(byte keycode) {
-        if (!isModifierSticky(keycode) && pressedKeys.contains(keycode)) {
+        if (pressedKeys.contains(keycode)) {
             pressedKeys.remove(keycode);
-            if (isModifier(keycode)) modifiersMask.unset(getModifierFlag(keycode));
+            if (isModifier(keycode) && !isModifierSticky(keycode)) {
+                int flag = getModifierFlag(keycode);
+                boolean stillPressed = false;
+                for (byte pressedKey : pressedKeys) {
+                    if (getModifierFlag(pressedKey) == flag) {
+                        stillPressed = true;
+                        break;
+                    }
+                }
+                if (!stillPressed) modifiersMask.unset(flag);
+            }
             triggerOnKeyRelease(keycode);
         }
     }
@@ -97,6 +104,7 @@ public class Keyboard {
 
     public boolean onKeyEvent(KeyEvent event) {
         if (ExternalController.isGameController(event.getDevice())) return false;
+        boolean physicalKeyboard = ExternalController.isPhysicalKeyboard(event.getDevice());
 
         int action = event.getAction();
         if (action == KeyEvent.ACTION_DOWN || action == KeyEvent.ACTION_UP) {
@@ -106,12 +114,22 @@ public class Keyboard {
             if (xKeycode == null) return false;
 
             if (action == KeyEvent.ACTION_DOWN) {
-                boolean shiftPressed = event.isShiftPressed() || keyCode == KeyEvent.KEYCODE_AT || keyCode == KeyEvent.KEYCODE_STAR || keyCode == KeyEvent.KEYCODE_POUND || keyCode == KeyEvent.KEYCODE_PLUS;
+                boolean shiftPressed = !physicalKeyboard && (
+                    event.isShiftPressed() || keyCode == KeyEvent.KEYCODE_AT ||
+                    keyCode == KeyEvent.KEYCODE_STAR || keyCode == KeyEvent.KEYCODE_POUND ||
+                    keyCode == KeyEvent.KEYCODE_PLUS
+                );
                 if (shiftPressed) xServer.injectKeyPress(XKeycode.KEY_SHIFT_L);
-                xServer.injectKeyPress(xKeycode, xKeycode != XKeycode.KEY_ENTER ? event.getUnicodeChar() : 0);
+                // Shortcuts need the guest's normal key mapping, not Android's
+                // Unicode result after Ctrl/Alt/Meta has been applied.
+                boolean shortcut = physicalKeyboard && (
+                    event.isCtrlPressed() || event.isAltPressed() || event.isMetaPressed()
+                );
+                int keysym = xKeycode != XKeycode.KEY_ENTER && !shortcut ? event.getUnicodeChar() : 0;
+                xServer.injectKeyPress(xKeycode, keysym);
             }
             else if (action == KeyEvent.ACTION_UP) {
-                xServer.injectKeyRelease(XKeycode.KEY_SHIFT_L);
+                if (!physicalKeyboard) xServer.injectKeyRelease(XKeycode.KEY_SHIFT_L);
                 xServer.injectKeyRelease(xKeycode);
             }
         }
