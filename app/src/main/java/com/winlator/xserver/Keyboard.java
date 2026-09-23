@@ -54,18 +54,20 @@ public class Keyboard {
             int flag = getModifierFlag(keycode);
             // Lock state persists, but each physical tap must have a matching
             // key release so Wine and accessibility hooks see the full gesture.
-            modifiersMask.set(flag, !modifiersMask.isSet(flag));
             triggerOnKeyPress(keycode, keysym);
+            modifiersMask.set(flag, !modifiersMask.isSet(flag));
         }
         else if (!pressedKeys.contains(keycode)) {
             pressedKeys.add(keycode);
-            if (isModifier(keycode)) modifiersMask.set(getModifierFlag(keycode));
             triggerOnKeyPress(keycode, keysym);
+            if (isModifier(keycode)) modifiersMask.set(getModifierFlag(keycode));
         }
     }
 
     public void setKeyRelease(byte keycode) {
         if (pressedKeys.contains(keycode)) {
+            // X11 reports the modifier state from before the release.
+            triggerOnKeyRelease(keycode);
             pressedKeys.remove(keycode);
             if (isModifier(keycode) && !isModifierSticky(keycode)) {
                 int flag = getModifierFlag(keycode);
@@ -78,7 +80,6 @@ public class Keyboard {
                 }
                 if (!stillPressed) modifiersMask.unset(flag);
             }
-            triggerOnKeyRelease(keycode);
         }
     }
 

@@ -13,6 +13,7 @@ import com.winlator.xserver.events.ConfigureRequest;
 import com.winlator.xserver.events.DestroyNotify;
 import com.winlator.xserver.events.Event;
 import com.winlator.xserver.events.Expose;
+import com.winlator.xserver.events.FocusChange;
 import com.winlator.xserver.events.MapNotify;
 import com.winlator.xserver.events.MapRequest;
 import com.winlator.xserver.events.ResizeRequest;
@@ -135,20 +136,38 @@ public class WindowManager extends XResourceManager {
     public void revertFocus() {
         switch (focusRevertTo) {
             case NONE:
-                focusedWindow = null;
+                setFocus(null, FocusRevertTo.NONE);
                 break;
             case POINTER_ROOT:
-                focusedWindow = rootWindow;
+                setFocus(rootWindow, FocusRevertTo.NONE);
                 break;
             case PARENT:
-                if (focusedWindow.getParent() != null) focusedWindow = focusedWindow.getParent();
+                Window parent = focusedWindow.getParent();
+                setFocus(parent != null ? parent : rootWindow, FocusRevertTo.NONE);
                 break;
         }
     }
 
     public void setFocus(Window focusedWindow, FocusRevertTo focusRevertTo) {
+        Window oldFocus = this.focusedWindow;
+        // Clients may query GetInputFocus while processing FocusIn. Publish
+        // the new state before writing the notifications to their streams.
         this.focusedWindow = focusedWindow;
         this.focusRevertTo = focusRevertTo;
+        if (oldFocus != focusedWindow) {
+            if (oldFocus != null) {
+                byte detail = focusedWindow == null ? FocusChange.NONE :
+                    oldFocus.isAncestorOf(focusedWindow) ? FocusChange.INFERIOR :
+                    focusedWindow.isAncestorOf(oldFocus) ? FocusChange.ANCESTOR : FocusChange.NONLINEAR;
+                oldFocus.sendEvent(Event.FOCUS_CHANGE, new FocusChange(false, oldFocus, detail));
+            }
+            if (focusedWindow != null) {
+                byte detail = oldFocus == null ? FocusChange.NONE :
+                    oldFocus.isAncestorOf(focusedWindow) ? FocusChange.ANCESTOR :
+                    focusedWindow.isAncestorOf(oldFocus) ? FocusChange.INFERIOR : FocusChange.NONLINEAR;
+                focusedWindow.sendEvent(Event.FOCUS_CHANGE, new FocusChange(true, focusedWindow, detail));
+            }
+        }
     }
 
     public FocusRevertTo getFocusRevertTo() {

@@ -346,23 +346,23 @@ public abstract class WindowRequests {
     }
 
     public static void setInputFocus(XClient client, XInputStream inputStream, XOutputStream outputStream) throws XRequestError {
-        WindowManager.FocusRevertTo focusRevertTo = WindowManager.FocusRevertTo.values()[client.getRequestData()];
+        int revertTo = client.getRequestData() & 0xff;
+        WindowManager.FocusRevertTo[] revertValues = WindowManager.FocusRevertTo.values();
+        if (revertTo >= revertValues.length) throw new BadValue(revertTo);
+        WindowManager.FocusRevertTo focusRevertTo = revertValues[revertTo];
         int windowId = inputStream.readInt();
         inputStream.skip(4);
 
-        switch (focusRevertTo) {
-            case NONE:
-                client.xServer.windowManager.setFocus(null, focusRevertTo);
-                break;
-            case POINTER_ROOT:
-                client.xServer.windowManager.setFocus(client.xServer.windowManager.rootWindow, focusRevertTo);
-                break;
-            case PARENT:
-                Window window = client.xServer.windowManager.getWindow(windowId);
-                if (window == null) throw new BadWindow(windowId);
-                client.xServer.windowManager.setFocus(window, focusRevertTo);
-                break;
+        // The focus window and revert-to policy are independent X11 fields.
+        // 0 and 1 are the protocol's None and PointerRoot focus values.
+        Window window;
+        if (windowId == 0) window = null;
+        else if (windowId == 1) window = client.xServer.windowManager.rootWindow;
+        else {
+            window = client.xServer.windowManager.getWindow(windowId);
+            if (window == null) throw new BadWindow(windowId);
         }
+        client.xServer.windowManager.setFocus(window, focusRevertTo);
     }
 
     public static void getInputFocus(XClient client, XInputStream inputStream, XOutputStream outputStream) throws IOException, XRequestError {

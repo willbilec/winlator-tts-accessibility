@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.os.Bundle;
+import android.os.Build;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -312,6 +313,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     @Override
     public void onResume() {
         super.onResume();
+        setKeyboardCaptureEnabled(true);
         if (environment != null) {
             xServerView.onResume();
             environment.onResume();
@@ -321,6 +323,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     @Override
     public void onPause() {
+        setKeyboardCaptureEnabled(false);
         ForegroundService.onPauseSession(this);
         super.onPause();
         if (environment != null && !isInPictureInPictureMode()) {
@@ -341,6 +344,22 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         if (environment != null) environment.stopEnvironmentComponents();
         ForegroundService.stopSession(this);
         super.onDestroy();
+    }
+
+    private void setKeyboardCaptureEnabled(boolean enabled) {
+        if (Build.VERSION.SDK_INT < 36) return;
+        try {
+            android.view.WindowManager.LayoutParams params = getWindow().getAttributes();
+            // Android 16.1 added this API; reflection keeps the existing
+            // compile SDK compatible with Android 16.0 and older devices.
+            android.view.WindowManager.LayoutParams.class
+                .getMethod("setKeyboardCaptureEnabled", boolean.class)
+                .invoke(params, enabled);
+            getWindow().setAttributes(params);
+        }
+        catch (ReflectiveOperationException e) {
+            // The method is absent on Android 16.0 devices.
+        }
     }
 
     @Override
@@ -586,6 +605,12 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         xServer.setRenderer(renderer);
         rootView.addView(xServerView);
+        // Keep Android's keyboard focus on the guest display so Tab is
+        // dispatched to Wine instead of traversing Android overlay views.
+        xServerView.setFocusable(true);
+        xServerView.setFocusableInTouchMode(true);
+        xServerView.setOnKeyListener((view, keyCode, event) -> xServer.keyboard.onKeyEvent(event));
+        xServerView.requestFocus();
 
         globalCursorSpeed = preferences.getFloat("cursor_speed", 1.0f);
         capturePointerOnExternalMouse = preferences.getBoolean("capture_pointer_on_external_mouse", true);
@@ -793,6 +818,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // Hardware keyboards are usable without an input-controls profile,
+        // even when the device also advertises gamepad buttons.
+        if (ExternalController.isPhysicalKeyboard(event.getDevice()) && xServer.keyboard.onKeyEvent(event)) return true;
         return (!inputControlsView.onKeyEvent(event) && !winHandler.onKeyEvent(event) && xServer.keyboard.onKeyEvent(event)) ||
                (!ExternalController.isGameController(event.getDevice()) && super.dispatchKeyEvent(event));
     }

@@ -270,6 +270,7 @@ public class ExternalController implements GamepadSlot {
 
     public static boolean isGameController(InputDevice device) {
         if (device == null) return false;
+        if (isPhysicalKeyboard(device)) return false;
         String name = device.getName();
         if (name != null) {
             String lowerName = name.toLowerCase();
@@ -280,6 +281,12 @@ public class ExternalController implements GamepadSlot {
         int sources = device.getSources();
         return !device.isVirtual() && ((sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
                (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK);
+    }
+
+    public static boolean isPhysicalKeyboard(InputDevice device) {
+        return device != null && !device.isVirtual() &&
+                device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC &&
+                (device.getSources() & InputDevice.SOURCE_KEYBOARD) == InputDevice.SOURCE_KEYBOARD;
     }
 
     public static float getCenteredAxis(MotionEvent event, int axis, int historyPos) {
