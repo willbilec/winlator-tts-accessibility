@@ -45,6 +45,7 @@ public class LogView extends View {
     private boolean scrollingVertically = false;
     private final Object lock = new Object();
     private final PrintStream printStream;
+    private final File liveLogFile;
 
     public LogView(Context context) {
         this(context, null);
@@ -66,6 +67,7 @@ public class LogView extends View {
         boolean saveToFile = preferences.getBoolean("save_logs_to_file", false);
 
         File logFile = new File(logPath);
+        liveLogFile = logFile;
         FileUtils.delete(logFile);
 
         if (saveToFile) {
@@ -234,6 +236,13 @@ public class LogView extends View {
     public void exportToFile() {
         final File logFile = getLogFile();
         String logPath = logFile.getPath();
+        if (printStream != null) {
+            printStream.flush();
+            if (!liveLogFile.equals(logFile) && !FileUtils.copy(liveLogFile, logFile)) return;
+            String path = logPath.substring(logPath.indexOf(Environment.DIRECTORY_DOCUMENTS));
+            AppUtils.showToast(getContext(), getContext().getString(R.string.logs_exported_to)+" "+path);
+            return;
+        }
         if (logFile.isFile()) logFile.delete();
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(logFile))) {
             synchronized (lock) {

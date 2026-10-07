@@ -86,9 +86,7 @@ public class ALSARequestHandler implements RequestHandler {
         ByteBuffer sharedBuffer = alsaClient.getSharedBuffer();
         ByteBuffer auxBuffer = alsaClient.getAuxBuffer();
 
-        auxBuffer.position(0).limit(requestLength);
-        sharedBuffer.position(ALSAClient.BUFFER_OFFSET).limit(ALSAClient.BUFFER_OFFSET + requestLength);
-        auxBuffer.put(sharedBuffer);
+        SharedAudioBuffer.copy(sharedBuffer, auxBuffer, ALSAClient.BUFFER_OFFSET, requestLength);
 
         try (XStreamLock lock = outputStream.lock()) {
             outputStream.writeByte((byte)1);

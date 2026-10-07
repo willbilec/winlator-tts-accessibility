@@ -11,7 +11,6 @@ import com.winlator.xserver.events.PropertyNotify;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Stack;
 
 public class Window extends XResource {
     public static final int FLAG_X = 1<<0;
@@ -494,16 +493,6 @@ public class Window extends XResource {
             if (eventListener.isInterestedIn(Event.BUTTON_PRESS)) return eventListener;
         }
         return null;
-    }
-
-    public void disableAllDescendants() {
-        Stack<Window> stack = new Stack<>();
-        stack.push(this);
-        while (!stack.isEmpty()) {
-            Window window = stack.pop();
-            window.attributes.setEnabled(false);
-            stack.addAll(window.children);
-        }
     }
 
     public String stringifyProperties() {

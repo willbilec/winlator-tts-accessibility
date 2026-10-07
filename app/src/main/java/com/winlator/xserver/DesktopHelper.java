@@ -40,6 +40,9 @@ public abstract class DesktopHelper {
     }
 
     private static void setFocusedWindow(XServer xServer, Window window) {
+        // The shortcut launcher hides Explorer before this map listener runs.
+        // That desktop remains mapped, but must not steal the application's focus.
+        if (!window.attributes.isEnabled() || !window.attributes.isViewable()) return;
         WinHandler winHandler = xServer.getWinHandler();
         if (window.isApplicationWindow()) {
             boolean parentIsRoot = window.getParent() == xServer.windowManager.rootWindow;
@@ -58,6 +61,8 @@ public abstract class DesktopHelper {
             }
         }
         else if (window.isDialogBox()) {
+            boolean parentIsRoot = window.getParent() == xServer.windowManager.rootWindow;
+            xServer.windowManager.setFocus(window, parentIsRoot ? WindowManager.FocusRevertTo.POINTER_ROOT : WindowManager.FocusRevertTo.PARENT);
             winHandler.bringToFront(window.getClassName(), window.getHandle());
         }
     }

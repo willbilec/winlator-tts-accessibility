@@ -8,8 +8,12 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
+import android.hardware.input.InputManager;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -48,7 +52,9 @@ import com.winlator.contentdialog.WineD3DConfigDialog;
 import com.winlator.core.AppUtils;
 import com.winlator.core.DefaultVersion;
 import com.winlator.core.EnvVars;
+import com.winlator.core.ExecutableInputSettings;
 import com.winlator.core.FileUtils;
+import com.winlator.core.AudioGameDependencyManager;
 import com.winlator.core.GeneralComponents;
 import com.winlator.core.KeyValueSet;
 import com.winlator.core.LocaleHelper;
@@ -75,6 +81,7 @@ import com.winlator.widget.MagnifierView;
 import com.winlator.widget.TouchpadView;
 import com.winlator.widget.XServerView;
 import com.winlator.winhandler.TaskManagerDialog;
+import com.winlator.winhandler.AndroidSpeechBridge;
 import com.winlator.winhandler.WinHandler;
 import com.winlator.xconnector.UnixSocketConfig;
 import com.winlator.xenvironment.RootFS;
@@ -99,11 +106,18 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.HashSet;
 import java.util.concurrent.Executors;
 
 public class XServerDisplayActivity extends AppCompatActivity implements NavigationView.OnNavigationItemSelectedListener {
+    private static final long QUICK_DPAD_HOLD_THRESHOLD_MS = 200;
+    private static final long QUICK_DPAD_PULSE_MS = 5;
+    private static WeakReference<XServerDisplayActivity> activeInstance = new WeakReference<>(null);
     private XServerView xServerView;
     private InputControlsView inputControlsView;
     private TouchpadView touchpadView;
@@ -113,6 +127,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private XServer xServer;
     private InputControlsManager inputControlsManager;
     private RootFS rootFS;
+    private GuestProgramLauncherComponent guestProgramLauncherComponent;
     private FrameRating frameRating;
     private Runnable editInputControlsCallback;
     private Shortcut shortcut;
@@ -132,22 +147,69 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private final WinHandler winHandler = new WinHandler(this);
     private float globalCursorSpeed = 1.0f;
     private boolean capturePointerOnExternalMouse = true;
+    private InputManager keyboardInputManager;
+    private boolean keyboardListenerRegistered;
+    private boolean shortDpadTapFilterEnabled;
+    private boolean bavisoftRawQueueEnabled;
+    private String currentExecutablePath = "";
+    private final Handler shortDpadTapHandler = new Handler(Looper.getMainLooper());
+    private final HashMap<Integer, PendingDpadTap> pendingDpadTaps = new HashMap<>();
+    private final HashSet<Integer> filteredHeldDpadKeys = new HashSet<>();
+    private final HashSet<Integer> physicalKeyboardDevices = new HashSet<>();
+
+    private static final class PendingDpadTap {
+        final KeyEvent downEvent;
+        boolean pulseReleased;
+        boolean longHoldStarted;
+        Runnable dispatchDown;
+        Runnable releasePulse;
+
+        PendingDpadTap(KeyEvent downEvent) {
+            this.downEvent = downEvent;
+        }
+    }
+    private final InputManager.InputDeviceListener keyboardDeviceListener = new InputManager.InputDeviceListener() {
+        @Override public void onInputDeviceAdded(int id) {
+            if (ExternalController.isPhysicalKeyboard(android.view.InputDevice.getDevice(id))) {
+                physicalKeyboardDevices.add(id);
+                resetKeyboardState("keyboard connected");
+            }
+        }
+        @Override public void onInputDeviceRemoved(int id) {
+            if (physicalKeyboardDevices.remove(id)) resetKeyboardState("keyboard disconnected");
+        }
+        @Override public void onInputDeviceChanged(int id) {
+            boolean wasKeyboard = physicalKeyboardDevices.remove(id);
+            boolean isKeyboard = ExternalController.isPhysicalKeyboard(android.view.InputDevice.getDevice(id));
+            if (isKeyboard) physicalKeyboardDevices.add(id);
+            if (wasKeyboard || isKeyboard) resetKeyboardState("keyboard configuration changed");
+        }
+    };
+    private final com.winlator.winhandler.NativeSpeechControl nativeSpeechControl =
+            new com.winlator.winhandler.NativeSpeechControl();
     private MagnifierView magnifierView;
     private DebugDialog debugDialog;
+    private com.winlator.core.GuestSessionLog guestSessionLog;
+    private boolean inputDiagnosticsEnabled;
     public int frameRatingWindowId = -1;
     private Win32AppWorkarounds win32AppWorkarounds;
     private String screenEffectProfile;
+    private String autoExitWindowClass;
+    private boolean sessionStopped;
+    private AndroidSpeechBridge androidSpeechBridge;
+    private PreloaderDialog preloaderDialog;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         AppUtils.setActivityTheme(this);
         super.onCreate(savedInstanceState);
+        activeInstance = new WeakReference<>(this);
         AppUtils.hideSystemUI(this);
         AppUtils.keepScreenOn(this);
         setContentView(R.layout.xserver_display_activity);
         ForegroundService.startSession(this);
 
-        final PreloaderDialog preloaderDialog = new PreloaderDialog(this);
+        preloaderDialog = new PreloaderDialog(this);
         preferences = PreferenceManager.getDefaultSharedPreferences(this);
         boolean useAndroidClipboardOnWine = preferences.getBoolean("use_android_clipboard_on_wine", false);
         clipboardManager = useAndroidClipboardOnWine ? (ClipboardManager)getSystemService(CLIPBOARD_SERVICE) : null;
@@ -155,10 +217,21 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         drawerLayout = findViewById(R.id.DrawerLayout);
         drawerLayout.setOnApplyWindowInsetsListener((view, windowInsets) -> windowInsets.replaceSystemWindowInsets(0, 0, 0, 0));
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
+        drawerLayout.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
+            @Override public void onDrawerOpened(@NonNull View drawerView) {
+                resetKeyboardState("game menu opened");
+            }
+            @Override public void onDrawerClosed(@NonNull View drawerView) {
+                if (touchpadView != null) touchpadView.requestFocus();
+            }
+        });
 
         NavigationView navigationView = findViewById(R.id.NavigationView);
         ProcessHelper.removeAllDebugCallbacks();
-        boolean enableLogs = preferences.getBoolean("enable_wine_debug", false) || preferences.getInt("box64_logs", 0) >= 1;
+        guestSessionLog = new com.winlator.core.GuestSessionLog(getFilesDir());
+        ProcessHelper.addDebugCallback(guestSessionLog);
+        inputDiagnosticsEnabled = preferences.getBoolean("enable_wine_debug", false);
+        boolean enableLogs = inputDiagnosticsEnabled || preferences.getInt("box64_logs", 0) >= 1;
         if (enableLogs) ProcessHelper.addDebugCallback(debugDialog = new DebugDialog(this));
         Menu menu = navigationView.getMenu();
         menu.findItem(R.id.menu_item_logs).setVisible(enableLogs);
@@ -195,6 +268,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
             String shortcutPath = getIntent().getStringExtra("shortcut_path");
             if (shortcutPath != null && !shortcutPath.isEmpty()) shortcut = new Shortcut(container, new File(shortcutPath));
+            currentExecutablePath = shortcut != null && !shortcut.isLinkPath() ? shortcut.path : getIntent().getStringExtra("exec_path");
+            currentExecutablePath = ExecutableInputSettings.normalizeExecutable(container, currentExecutablePath);
+            shortDpadTapFilterEnabled = ExecutableInputSettings.getShortDpadTaps(container, currentExecutablePath);
+            bavisoftRawQueueEnabled = ExecutableInputSettings.getBavisoftRawQueue(container, currentExecutablePath);
 
             String graphicsDriver = container.getGraphicsDriver();
             audioDriver = container.getAudioDriver();
@@ -236,8 +313,36 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         inputControlsManager = new InputControlsManager(this);
         xServer = new XServer(this, screenInfo);
         xServer.setWinHandler(winHandler);
+        if (inputDiagnosticsEnabled) xServer.inputDeviceManager.setKeyTrace(line -> {
+            if (guestSessionLog != null) guestSessionLog.call(line);
+        });
+        xServer.windowManager.setFocusTrace(line -> {
+            if (guestSessionLog != null) guestSessionLog.call(line);
+        });
         final boolean[] flags = {false, shortcut != null || getIntent().hasExtra("exec_path")};
         xServer.windowManager.addOnWindowModificationListener(new WindowManager.OnWindowModificationListener() {
+            @Override
+            public void onDestroyWindow(Window window) {
+                if (!preferences.getBoolean("auto_close_container", true)) return;
+                String destroyedClass = window.getClassName();
+                if (autoExitWindowClass == null || !autoExitWindowClass.equalsIgnoreCase(destroyedClass)) return;
+                if (guestSessionLog != null) guestSessionLog.call(
+                        "X11 target window destroyed class=" + destroyedClass + " id=" + window.id);
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                    boolean guestProcessAlive = guestProgramLauncherComponent != null &&
+                            guestProgramLauncherComponent.hasLiveTrackedProcesses();
+                    if (preferences.getBoolean("auto_close_container", true) && !sessionStopped && xServer != null &&
+                            !guestProcessAlive &&
+                            !xServer.windowManager.hasWindowWithClassName(autoExitWindowClass)) {
+                        if (guestSessionLog != null) guestSessionLog.call(
+                                "X11 target window stayed closed; stopping container session");
+                        exit();
+                    }
+                    else if (guestProcessAlive && guestSessionLog != null) guestSessionLog.call(
+                            "X11 target window closed while a tracked guest process remains; keeping container session");
+                }, 2000);
+            }
+
             @Override
             public void onUpdateWindowContent(Window window) {
                 if (window.id == frameRatingWindowId) frameRating.update();
@@ -253,7 +358,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
                 if (flags[1] && window.attributes.isViewable() && window.isDesktopWindow()) {
                     window.attributes.setViewable(false);
-                    if (window.attributes.isEnabled()) window.disableAllDescendants();
+                    // Wine can parent installer/game windows under its desktop.
+                    // Hiding Explorer must not disable those application's input targets.
+                    window.attributes.setEnabled(false);
+                    if (guestSessionLog != null) guestSessionLog.call(
+                            "X11 hide desktop=" + window.id + " preserving child input");
                 }
 
                 if (win32AppWorkarounds != null) win32AppWorkarounds.applyWindowWorkarounds(window);
@@ -297,6 +406,14 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        setKeyboardCaptureEnabled(hasFocus);
+        if (!hasFocus && xServer != null) {
+            clearShortDpadTapState();
+            try (com.winlator.xserver.XLock lock = xServer.lock(
+                    XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.INPUT_DEVICE)) {
+                xServer.keyboard.releasePressedKeys();
+            }
+        }
 
         if (hasFocus) {
             if (capturePointerOnExternalMouse) touchpadView.requestPointerCapture();
@@ -314,6 +431,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     public void onResume() {
         super.onResume();
         setKeyboardCaptureEnabled(true);
+        registerKeyboardListener();
         if (environment != null) {
             xServerView.onResume();
             environment.onResume();
@@ -324,6 +442,14 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     @Override
     public void onPause() {
         setKeyboardCaptureEnabled(false);
+        unregisterKeyboardListener();
+        clearShortDpadTapState();
+        if (xServer != null) {
+            try (com.winlator.xserver.XLock lock = xServer.lock(
+                    XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.INPUT_DEVICE)) {
+                xServer.keyboard.releasePressedKeys();
+            }
+        }
         ForegroundService.onPauseSession(this);
         super.onPause();
         if (environment != null && !isInPictureInPictureMode()) {
@@ -340,8 +466,13 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     @Override
     protected void onDestroy() {
-        winHandler.stop();
-        if (environment != null) environment.stopEnvironmentComponents();
+        clearShortDpadTapState();
+        stopSessionComponents();
+        if (guestSessionLog != null) {
+            ProcessHelper.removeDebugCallback(guestSessionLog);
+            guestSessionLog.close();
+        }
+        if (activeInstance.get() == this) activeInstance.clear();
         ForegroundService.stopSession(this);
         super.onDestroy();
     }
@@ -362,6 +493,71 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
     }
 
+    private void registerKeyboardListener() {
+        if (keyboardInputManager == null) keyboardInputManager = (InputManager)getSystemService(INPUT_SERVICE);
+        if (keyboardInputManager == null || keyboardListenerRegistered) return;
+        physicalKeyboardDevices.clear();
+        for (int id : android.view.InputDevice.getDeviceIds()) {
+            if (ExternalController.isPhysicalKeyboard(android.view.InputDevice.getDevice(id))) physicalKeyboardDevices.add(id);
+        }
+        keyboardInputManager.registerInputDeviceListener(keyboardDeviceListener,
+                new android.os.Handler(android.os.Looper.getMainLooper()));
+        keyboardListenerRegistered = true;
+    }
+
+    private void unregisterKeyboardListener() {
+        if (keyboardInputManager != null && keyboardListenerRegistered) {
+            keyboardInputManager.unregisterInputDeviceListener(keyboardDeviceListener);
+        }
+        keyboardListenerRegistered = false;
+        physicalKeyboardDevices.clear();
+    }
+
+    private void resetKeyboardState(String reason) {
+        clearShortDpadTapState();
+        if (xServer == null || sessionStopped) return;
+        try (com.winlator.xserver.XLock lock = xServer.lock(
+                XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.INPUT_DEVICE)) {
+            xServer.keyboard.reset();
+        }
+        android.util.Log.i("WinlatorInput", "Keyboard reset: " + reason);
+        if (guestSessionLog != null) guestSessionLog.call("Keyboard reset: " + reason);
+    }
+
+    private void restartKeyboardInput() {
+        resetKeyboardState("menu request");
+        unregisterKeyboardListener();
+        registerKeyboardListener();
+        setKeyboardCaptureEnabled(false);
+        if (touchpadView != null) touchpadView.clearFocus();
+        setKeyboardCaptureEnabled(getWindow().getDecorView().hasWindowFocus());
+        drawerLayout.closeDrawers();
+        AppUtils.showToast(this, R.string.keyboard_reset_done);
+    }
+
+    public static void requestSessionShutdown() {
+        XServerDisplayActivity activity = activeInstance.get();
+        if (activity == null) return;
+        activity.runOnUiThread(() -> {
+            activity.stopSessionComponents();
+            activity.finishAndRemoveTask();
+        });
+    }
+
+    private synchronized void stopSessionComponents() {
+        if (sessionStopped) return;
+        sessionStopped = true;
+        unregisterKeyboardListener();
+        nativeSpeechControl.close();
+        if (androidSpeechBridge != null) {
+            androidSpeechBridge.close();
+            androidSpeechBridge = null;
+        }
+        winHandler.stop();
+        if (environment != null) environment.stopEnvironmentComponents();
+        ProcessHelper.killOwnedNativeProcesses();
+    }
+
     @Override
     public void onBackPressed() {
         if (environment != null) {
@@ -379,6 +575,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             case R.id.menu_item_keyboard:
                 AppUtils.showKeyboard(this);
                 drawerLayout.closeDrawers();
+                break;
+            case R.id.menu_item_reset_keyboard:
+                restartKeyboardInput();
                 break;
             case R.id.menu_item_input_controls:
                 showInputControlsDialog();
@@ -443,8 +642,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     }
 
     private void exit() {
-        winHandler.stop();
-        if (environment != null) environment.stopEnvironmentComponents();
+        stopSessionComponents();
 
         Intent intent = getIntent();
         if (intent.hasExtra("exec_path")) {
@@ -516,21 +714,93 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         boolean enableWineDebug = preferences.getBoolean("enable_wine_debug", false);
         String wineDebugChannels = preferences.getString("wine_debug_channels", SettingsFragment.DEFAULT_WINE_DEBUG_CHANNELS);
-        envVars.put("WINEDEBUG", enableWineDebug && !wineDebugChannels.isEmpty() ? "+"+wineDebugChannels.replace(",", ",+") : "-all");
+        envVars.put("WINEDEBUG", enableWineDebug && !wineDebugChannels.isEmpty() ? "+"+wineDebugChannels.replace(",", ",+") : "-all,err+all");
 
         FileUtils.clear(rootFS.getTmpDir());
 
-        GuestProgramLauncherComponent guestProgramLauncherComponent = new GuestProgramLauncherComponent();
+        guestProgramLauncherComponent = new GuestProgramLauncherComponent();
 
         if (container != null) {
             if (container.getHUDMode() == FrameRating.Mode.FULL.ordinal()) envVars.put("X11_WND_GPU_INFO", "1");
 
             String desktopName = shortcut != null || getIntent().hasExtra("exec_path") ? "nogui" : "shell";
-            String guestExecutable = "wine explorer /desktop="+desktopName+","+xServer.screenInfo+" "+getWineStartCommand();
+            String wineStartCommand = getWineStartCommand();
+            // Keep built-in SAPI in Super Liam and native SAPI in its RPC helper.
+            boolean directLaunchDiagnostic = wineStartCommand.toLowerCase(java.util.Locale.ROOT)
+                    .contains("super liam.exe");
+            String guestExecutable = "wine explorer /desktop="+desktopName+","+xServer.screenInfo+
+                    " C:\\WinlatorNativeSapi\\payload\\nvda-launch.exe "+
+                    (directLaunchDiagnostic ? "--builtin-game-sapi " : "")+
+                    wineStartCommand;
             guestProgramLauncherComponent.setGuestExecutable(guestExecutable);
+            String launchedExecutable = null;
+            if (shortcut != null && !shortcut.isLinkPath()) launchedExecutable = FileUtils.getName(shortcut.path);
+            else if (getIntent().hasExtra("exec_path")) {
+                String path = getIntent().getStringExtra("exec_path");
+                if (path != null && !path.toLowerCase(java.util.Locale.ROOT).endsWith(".lnk"))
+                    launchedExecutable = FileUtils.getName(path);
+            }
+            if ((launchedExecutable == null || launchedExecutable.isEmpty()) && shortcut != null &&
+                    shortcut.wmClass != null && shortcut.wmClass.toLowerCase(java.util.Locale.ROOT).endsWith(".exe"))
+                launchedExecutable = shortcut.wmClass;
+            if (launchedExecutable == null || launchedExecutable.isEmpty()) {
+                java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?i)\"([^\"]+\\.exe)\"")
+                        .matcher(wineStartCommand);
+                while (matcher.find()) launchedExecutable = FileUtils.getName(matcher.group(1));
+            }
+            autoExitWindowClass = launchedExecutable;
+            guestProgramLauncherComponent.setAutoExitTargetExecutable(launchedExecutable);
+            guestSessionLog.call("Guest command: " + guestExecutable);
+            if (directLaunchDiagnostic) guestSessionLog.call("Super Liam uses built-in SAPI in the game and the normal prelaunch native NVDA helper.");
+
+            {
+                File bridgeDir = new File(rootFS.getRootDir().getPath()+RootFS.WINEPREFIX+
+                        "/drive_c/NVDA-Bridge");
+                bridgeDir.mkdirs();
+                File speechSettings = new File(rootFS.getRootDir().getPath()+RootFS.WINEPREFIX+
+                        "/drive_c/WinlatorNativeSapi/speech-settings.ini");
+                speechSettings.getParentFile().mkdirs();
+                int regularRate = Math.max(-10, Math.min(10, preferences.getInt("sapi_tts_rate", 0)));
+                int nvdaRate = Math.max(-10, Math.min(10, preferences.getInt("nvda_tts_rate", 0)));
+                FileUtils.writeString(speechSettings, "[speech]\nregularRate="+regularRate+
+                        "\nnvdaRate="+nvdaRate+"\n");
+                guestProgramLauncherComponent.setPreLaunchGuestExecutable(
+                        "wine C:\\WinlatorNativeSapi\\payload\\configure-native-sapi.exe --bootstrap",
+                        new File(bridgeDir, "nvda-rpc-ready"));
+                guestProgramLauncherComponent.setPreLaunchFailureCallback((message) -> runOnUiThread(() -> {
+                    preloaderDialog.closeOnUiThread();
+                    new androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle("Speech setup failed")
+                            .setMessage(message)
+                            .setCancelable(false)
+                            .setPositiveButton(android.R.string.ok, (dialog, which) -> exit())
+                            .show();
+                }));
+            }
 
             envVars.putAll(container.getEnvVars());
             if (shortcut != null) envVars.putAll(shortcut.getExtra("envVars"));
+            if (directLaunchDiagnostic) {
+                StringBuilder overrides = new StringBuilder();
+                if (envVars.has("WINEDLLOVERRIDES")) {
+                    for (String entry : envVars.get("WINEDLLOVERRIDES").split(";")) {
+                        int separator = entry.indexOf('=');
+                        if (separator < 0) continue;
+                        StringBuilder names = new StringBuilder();
+                        for (String name : entry.substring(0, separator).split(",")) {
+                            if (name.trim().equalsIgnoreCase("sapi") || name.trim().equalsIgnoreCase("sapi.dll")) continue;
+                            if (names.length() > 0) names.append(',');
+                            names.append(name);
+                        }
+                        if (names.length() == 0) continue;
+                        if (overrides.length() > 0) overrides.append(';');
+                        overrides.append(names).append(entry.substring(separator));
+                    }
+                }
+                // Wine's per-application override selects built-in SAPI for the
+                // game. An environment override would also affect the RPC worker.
+                envVars.put("WINEDLLOVERRIDES", overrides.toString());
+            }
             if (!envVars.has("WINEESYNC")) envVars.put("WINEESYNC", "1");
 
             guestProgramLauncherComponent.setBox64Preset(shortcut != null ? shortcut.getExtra("box64Preset", container.getBox64Preset()) : container.getBox64Preset());
@@ -571,7 +841,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
 
         guestProgramLauncherComponent.setEnvVars(envVars);
-        guestProgramLauncherComponent.setTerminationCallback((status) -> exit());
+        guestProgramLauncherComponent.setTerminationCallback((status) -> {
+            if (preferences.getBoolean("auto_close_container", true)) exit();
+            else if (guestSessionLog != null) guestSessionLog.call(
+                    "Guest launcher exited; automatic container close disabled by settings");
+        });
         environment.addComponent(guestProgramLauncherComponent);
 
         if (isGenerateWineprefix()) {
@@ -676,6 +950,19 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         final CheckBox cbShowTouchscreenControls = dialog.findViewById(R.id.CBShowTouchscreenControls);
         cbShowTouchscreenControls.setChecked(inputControlsView.isShowTouchscreenControls());
 
+        final CheckBox cbShortDpadTaps = dialog.findViewById(R.id.CBShortDpadTaps);
+        cbShortDpadTaps.setChecked(shortDpadTapFilterEnabled);
+        cbShortDpadTaps.setEnabled(!currentExecutablePath.isEmpty());
+        android.widget.TextView executableScope = dialog.findViewById(R.id.TVExecutableScope);
+        executableScope.setText(currentExecutablePath.isEmpty() ? getString(R.string.input_controls_executable_unknown) :
+                getString(R.string.input_controls_executable_scope, currentExecutablePath));
+        final CheckBox cbBavisoftRawQueue = dialog.findViewById(R.id.CBBavisoftRawQueue);
+        final CheckBox cbBreedAudioKeepAlive = dialog.findViewById(R.id.CBBreedAudioKeepAlive);
+        cbBreedAudioKeepAlive.setChecked(ExecutableInputSettings.getBreedAudioKeepAlive(container, currentExecutablePath));
+        cbBreedAudioKeepAlive.setEnabled(com.winlator.core.BreedMemorialAudioCompatibility.appliesTo(currentExecutablePath));
+        cbBavisoftRawQueue.setChecked(bavisoftRawQueueEnabled);
+        cbBavisoftRawQueue.setEnabled(!currentExecutablePath.isEmpty() && com.winlator.core.BavisoftInputCompatibility.appliesTo(currentExecutablePath));
+
         dialog.findViewById(R.id.BTSettings).setOnClickListener((v) -> {
             int position = sProfile.getSelectedItemPosition();
             Intent intent = new Intent(this, MainActivity.class);
@@ -690,6 +977,14 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         });
 
         dialog.setOnConfirmCallback(() -> {
+            if (!currentExecutablePath.isEmpty()) {
+                shortDpadTapFilterEnabled = cbShortDpadTaps.isChecked();
+                ExecutableInputSettings.setShortDpadTaps(container, currentExecutablePath, shortDpadTapFilterEnabled);
+                ExecutableInputSettings.setBreedAudioKeepAlive(container, currentExecutablePath, cbBreedAudioKeepAlive.isChecked());
+                bavisoftRawQueueEnabled = cbBavisoftRawQueue.isChecked();
+                ExecutableInputSettings.setBavisoftRawQueue(container, currentExecutablePath, bavisoftRawQueueEnabled);
+                clearShortDpadTapState();
+            }
             xServer.setRelativeMouseMovement(cbRelativeMouseMovement.isChecked());
             inputControlsView.setShowTouchscreenControls(cbShowTouchscreenControls.isChecked());
             int position = sProfile.getSelectedItemPosition();
@@ -818,11 +1113,104 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (drawerLayout != null && drawerLayout.isDrawerOpen(GravityCompat.START)) {
+            return super.dispatchKeyEvent(event);
+        }
+        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0 &&
+                (event.getKeyCode() == KeyEvent.KEYCODE_CTRL_LEFT ||
+                 event.getKeyCode() == KeyEvent.KEYCODE_CTRL_RIGHT) &&
+                preferences.getBoolean("nvda_control_interrupt", true)) {
+            nativeSpeechControl.cancel();
+        }
         // Hardware keyboards are usable without an input-controls profile,
         // even when the device also advertises gamepad buttons.
-        if (ExternalController.isPhysicalKeyboard(event.getDevice()) && xServer.keyboard.onKeyEvent(event)) return true;
-        return (!inputControlsView.onKeyEvent(event) && !winHandler.onKeyEvent(event) && xServer.keyboard.onKeyEvent(event)) ||
-               (!ExternalController.isGameController(event.getDevice()) && super.dispatchKeyEvent(event));
+        boolean physical = ExternalController.isPhysicalKeyboard(event.getDevice());
+        if (physical) physicalKeyboardDevices.add(event.getDeviceId());
+        boolean handled;
+        if (physical && shortDpadTapFilterEnabled && isDpadArrowKey(event.getKeyCode())) {
+            handled = handleShortDpadTap(event);
+        }
+        else if (physical && xServer.keyboard.onKeyEvent(event)) handled = true;
+        else handled = (!inputControlsView.onKeyEvent(event) && !winHandler.onKeyEvent(event) && xServer.keyboard.onKeyEvent(event)) ||
+                (!ExternalController.isGameController(event.getDevice()) && super.dispatchKeyEvent(event));
+        if (inputDiagnosticsEnabled && (event.getAction() == KeyEvent.ACTION_DOWN || event.getAction() == KeyEvent.ACTION_UP)) {
+            com.winlator.xserver.Window focus = xServer.windowManager.getFocusedWindow();
+            android.util.Log.d("WinlatorInput", "key=" + event.getKeyCode() + " action=" + event.getAction() +
+                    " device=" + event.getDeviceId() + " repeat=" + event.getRepeatCount() +
+                    " physical=" + physical + " handled=" + handled +
+                    " guestFocus=" + (focus == null ? "none" : focus.id));
+        }
+        return handled;
+    }
+
+    private boolean handleShortDpadTap(KeyEvent event) {
+        int keyCode = event.getKeyCode();
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.getRepeatCount() > 0) {
+                if (pendingDpadTaps.containsKey(keyCode)) return true;
+                return filteredHeldDpadKeys.contains(keyCode) && xServer.keyboard.onKeyEvent(event);
+            }
+            if (pendingDpadTaps.containsKey(keyCode) || filteredHeldDpadKeys.contains(keyCode)) return true;
+
+            PendingDpadTap pending = new PendingDpadTap(event);
+            pending.dispatchDown = () -> {
+                if (pendingDpadTaps.get(keyCode) != pending || !pending.pulseReleased || xServer == null) return;
+                pending.longHoldStarted = true;
+                filteredHeldDpadKeys.add(keyCode);
+                xServer.keyboard.onKeyEvent(createFilteredDpadEvent(pending.downEvent, KeyEvent.ACTION_DOWN,
+                        pending.downEvent.getDownTime(), SystemClock.uptimeMillis()));
+            };
+            xServer.keyboard.onKeyEvent(event);
+            pending.releasePulse = () -> {
+                if (pendingDpadTaps.get(keyCode) != pending || pending.longHoldStarted || xServer == null) return;
+                xServer.keyboard.onKeyEvent(createFilteredDpadEvent(pending.downEvent, KeyEvent.ACTION_UP,
+                        pending.downEvent.getDownTime(), SystemClock.uptimeMillis()));
+                pending.pulseReleased = true;
+            };
+            pendingDpadTaps.put(keyCode, pending);
+            shortDpadTapHandler.postDelayed(pending.releasePulse, QUICK_DPAD_PULSE_MS);
+            shortDpadTapHandler.postDelayed(pending.dispatchDown, QUICK_DPAD_HOLD_THRESHOLD_MS);
+            return true;
+        }
+
+        if (event.getAction() == KeyEvent.ACTION_UP) {
+            PendingDpadTap pending = pendingDpadTaps.remove(keyCode);
+            if (pending != null) {
+                shortDpadTapHandler.removeCallbacks(pending.dispatchDown);
+                shortDpadTapHandler.removeCallbacks(pending.releasePulse);
+                long heldMs = event.getEventTime() - pending.downEvent.getEventTime();
+                if (pending.longHoldStarted) {
+                    filteredHeldDpadKeys.remove(keyCode);
+                    return xServer.keyboard.onKeyEvent(event);
+                }
+                android.util.Log.d("WinlatorInput", "Short-DPAD pulse key=" + keyCode + " heldMs=" + heldMs +
+                        " pulseMs=" + QUICK_DPAD_PULSE_MS);
+                if (guestSessionLog != null) guestSessionLog.call("Short-DPAD pulse key=" + keyCode +
+                        " heldMs=" + heldMs + " pulseMs=" + QUICK_DPAD_PULSE_MS);
+                if (!pending.pulseReleased) xServer.keyboard.onKeyEvent(event);
+                return true;
+            }
+            filteredHeldDpadKeys.remove(keyCode);
+            return xServer.keyboard.onKeyEvent(event);
+        }
+
+        return xServer.keyboard.onKeyEvent(event);
+    }
+
+    private static KeyEvent createFilteredDpadEvent(KeyEvent source, int action, long downTime, long eventTime) {
+        return new KeyEvent(downTime, eventTime, action, source.getKeyCode(), 0, source.getMetaState(),
+                source.getDeviceId(), source.getScanCode(), 0, source.getSource());
+    }
+
+    private void clearShortDpadTapState() {
+        shortDpadTapHandler.removeCallbacksAndMessages(null);
+        pendingDpadTaps.clear();
+        filteredHeldDpadKeys.clear();
+    }
+
+    private static boolean isDpadArrowKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
+                keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
     }
 
     public InputControlsView getInputControlsView() {
@@ -1007,6 +1395,40 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 filename = filename.substring(0, spaceIndex);
             }
             cmdArgs = "/dir "+StringUtils.escapeDOSPath(execDir)+" \""+filename+"\""+execArgs;
+            AudioGameDependencyManager.GameDefinition dependencyGame = AudioGameDependencyManager.findByExecutable(filename);
+            if (dependencyGame != null && (dependencyGame.id.equals("breed-memorial") ||
+                    !AudioGameDependencyManager.isInstalled(container, dependencyGame.id))) {
+                try {
+                    AudioGameDependencyManager.install(this, container, dependencyGame.id);
+                    if (guestSessionLog != null) guestSessionLog.call("Automatic dependencies installed: " + dependencyGame.name + " executable=" + filename);
+                } catch (java.io.IOException exception) {
+                    android.util.Log.e("AudioGameDependencies", "Could not provision " + dependencyGame.name, exception);
+                    if (guestSessionLog != null) guestSessionLog.call("Automatic dependencies failed: " + dependencyGame.name + ": " + exception.getMessage());
+                    runOnUiThread(() -> AppUtils.showToast(this, getString(R.string.audio_game_install_failed, exception.getMessage())));
+                }
+            }
+            if (com.winlator.core.BreedMemorialAudioCompatibility.appliesTo(filename)) {
+                try {
+                    File gameExecutable = new File(WineUtils.dosToUnixPath(execPath, container));
+                    boolean updater = com.winlator.core.BreedMemorialUpdaterCompatibility.provision(this, gameExecutable);
+                    boolean enabled = ExecutableInputSettings.getBreedAudioKeepAlive(container, execPath);
+                    boolean applied = com.winlator.core.BreedMemorialAudioCompatibility.provision(this, gameExecutable, enabled);
+                    if (guestSessionLog != null) guestSessionLog.call("Breed Memorial dependencies installed; updater guard=" + updater + "; audio enabled=" + enabled + " applied=" + applied);
+                } catch (java.io.IOException exception) {
+                    android.util.Log.e("BreedMemorialDependencies", "Could not provision game dependencies", exception);
+                    if (guestSessionLog != null) guestSessionLog.call("Breed Memorial provisioning failed: " + exception.getMessage());
+                    runOnUiThread(() -> AppUtils.showToast(this, getString(R.string.audio_game_install_failed, exception.getMessage())));
+                }
+            }
+            if (com.winlator.core.BavisoftInputCompatibility.appliesTo(filename) &&
+                    com.winlator.core.BavisoftInputCompatibility.provision(this,
+                            new File(rootFS.getRootDir().getPath()+RootFS.WINEPREFIX))) {
+                cmdArgs = com.winlator.core.BavisoftInputCompatibility.command(
+                        execDir+"\\"+filename, execArgs,
+                        ExecutableInputSettings.getBavisoftRawQueue(container, execDir+"\\"+filename));
+                if (guestSessionLog != null)
+                    guestSessionLog.call("Bavisoft DirectInput 8 keyboard candidate enabled: "+filename);
+            }
         }
 
         if (cmdArgs.isEmpty()) cmdArgs = "/dir C:\\windows \"wfm.exe\"";
@@ -1100,6 +1522,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         File rootDir = rootFS.getRootDir();
         FileUtils.delete(new File(rootDir, "/opt/apps"));
         TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "rootfs_patches.tzst", rootDir);
+        File nativeSapiDir = new File(rootDir.getPath()+RootFS.WINEPREFIX+"/drive_c/WinlatorNativeSapi");
+        nativeSapiDir.mkdirs();
+        // The archive contains no backup directory; extracting updates preserves rollback data.
+        TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this,
+                "winlator-native-sapi-candidate.tzst", nativeSapiDir);
         TarCompressorUtils.extract(TarCompressorUtils.Type.ZSTD, this, "pulseaudio.tzst", new File(getFilesDir(), "pulseaudio"));
         WineUtils.applySystemTweaks(this, wineInfo);
         container.putExtra("dxwrapper", null);

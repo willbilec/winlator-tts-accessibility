@@ -43,9 +43,11 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
 public class ContainerFileManagerFragment extends BaseFileManagerFragment<FileInfo> {
-    private final int containerId;
+    private int containerId;
     private String startPath;
     private Container container;
+
+    public ContainerFileManagerFragment() {}
 
     public ContainerFileManagerFragment(int containerId) {
         this(containerId, null);
@@ -54,16 +56,35 @@ public class ContainerFileManagerFragment extends BaseFileManagerFragment<FileIn
     public ContainerFileManagerFragment(int containerId, String startPath) {
         this.containerId = containerId;
         this.startPath = startPath;
+        Bundle arguments = new Bundle();
+        arguments.putInt("container_id", containerId);
+        arguments.putString("start_path", startPath);
+        setArguments(arguments);
     }
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        Bundle arguments = getArguments();
+        if (arguments != null) {
+            containerId = arguments.getInt("container_id", containerId);
+            startPath = arguments.getString("start_path");
+        }
+        if (savedInstanceState != null) startPath = savedInstanceState.getString("current_path", startPath);
+        // Old builds did not save constructor parameters in fragment arguments.
+        if (containerId == 0) {
+            containerId = requireActivity().getIntent().getIntExtra("container_id", 0);
+            if (containerId == 0 && !manager.getContainers().isEmpty()) containerId = manager.getContainers().get(0).id;
+        }
         container = manager.getContainerById(containerId);
         viewStyle = ViewStyle.valueOf(preferences.getString("container_file_manager_view_style", "GRID"));
         
-        if (startPath != null) {
+        if (container == null) {
+            android.util.Log.w("ContainerFileManager", "Restored container no longer exists: " + containerId);
+            requireActivity().finish();
+        }
+        if (container != null && startPath != null) {
             setCurrentWorkingPath(WineUtils.unixToDOSPath(startPath, container));
             startPath = null;
         }
@@ -73,11 +94,19 @@ public class ContainerFileManagerFragment extends BaseFileManagerFragment<FileIn
     public void refreshContent() {
         super.refreshContent();
 
+        if (container == null) return;
+
         FileInfo parent = !folderStack.isEmpty() ? folderStack.peek() : null;
         ArrayList<FileInfo> files = manager.loadFiles(container, parent);
         recyclerView.setAdapter(new FileInfoAdapter(files));
         emptyTextView.setVisibility(files.isEmpty() ? View.VISIBLE : View.GONE);
         updateActionBarTitle();
+    }
+
+    @Override
+    public void onSaveInstanceState(@NonNull Bundle state) {
+        super.onSaveInstanceState(state);
+        if (!folderStack.isEmpty()) state.putString("current_path", folderStack.peek().path);
     }
 
     @Override
@@ -205,7 +234,7 @@ public class ContainerFileManagerFragment extends BaseFileManagerFragment<FileIn
 
     @Override
     protected String getHomeTitle() {
-        return container.getName();
+        return container != null ? container.getName() : getString(R.string.containers);
     }
 
     private static class LoadIconTask {

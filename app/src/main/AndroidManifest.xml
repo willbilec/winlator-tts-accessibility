@@ -36,6 +36,17 @@
             </intent-filter>
         </activity>
 
+        <!-- ADB-only control surface; DUMP is granted to the Android shell UID. -->
+        <activity android:name="com.winlator.AdbControlActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <receiver android:name="com.winlator.AdbControlReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+
         <activity android:name="com.winlator.XServerDisplayActivity"
             android:exported="false"
             android:theme="@style/AppThemeFullscreenDark"

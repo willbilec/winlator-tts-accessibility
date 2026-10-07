@@ -84,6 +84,7 @@ public class XConnectorEpoll {
             else requestHandler.handleRequest(client);
         }
         catch (IOException e) {
+            android.util.Log.w("XConnectorEpoll", "Closing invalid or failed client connection", e);
             killConnection(client);
         }
     }

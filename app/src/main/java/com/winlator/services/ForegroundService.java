@@ -324,6 +324,7 @@ public class ForegroundService extends Service {
 
         sessionActive.set(false);
         isSessionInBackground = false;
+        XServerDisplayActivity.requestSessionShutdown();
 
         new Thread(() -> new Handler(Looper.getMainLooper()).post(() -> {
             serviceRunning.set(false);
@@ -332,7 +333,7 @@ public class ForegroundService extends Service {
                 instance.stopSelf();
             }
             new Handler(Looper.getMainLooper()).postDelayed(
-                    () -> android.os.Process.killProcess(android.os.Process.myPid()), 500L);
+                    () -> android.os.Process.killProcess(android.os.Process.myPid()), 2000L);
         }), "ForegroundServiceCleanup").start();
     }
 
@@ -352,6 +353,12 @@ public class ForegroundService extends Service {
         if (screenStateReceiver != null) {
             try { unregisterReceiver(screenStateReceiver); } catch (Exception ignored) {}
             screenStateReceiver = null;
+        }
+
+        if (screenReceiverThread != null) {
+            screenReceiverThread.quitSafely();
+            screenReceiverThread = null;
+            screenReceiverHandler = null;
         }
 
         if (notificationUtils != null) {

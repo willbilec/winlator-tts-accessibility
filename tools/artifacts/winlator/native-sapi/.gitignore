@@ -1,0 +1,9 @@
+/runtime/
+/rhvoice/
+/payload/
+*.exe
+*.msi
+*.apk
+*.tzst
+*.tar
+*.log

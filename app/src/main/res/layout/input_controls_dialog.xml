@@ -26,6 +26,13 @@
             android:src="@drawable/icon_settings" />
     </LinearLayout>
 
+    <TextView
+        android:id="@+id/TVExecutableScope"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="4dp"
+        android:textAppearance="?android:attr/textAppearanceSmall" />
+
     <CheckBox
         android:id="@+id/CBShowTouchscreenControls"
         android:layout_width="wrap_content"
@@ -38,4 +45,21 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="@string/relative_mouse_movement" />
+
+    <CheckBox
+        android:id="@+id/CBShortDpadTaps"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/short_dpad_taps" />
+
+    <CheckBox
+        android:id="@+id/CBBavisoftRawQueue"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/bavisoft_raw_queue" />
+    <CheckBox
+        android:id="@+id/CBBreedAudioKeepAlive"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/breed_audio_keepalive" />
 </LinearLayout>

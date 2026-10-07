@@ -1,0 +1,22 @@
+diff --git a/src/ScreenReaderDriverNVDA.cpp b/src/ScreenReaderDriverNVDA.cpp
+--- a/src/ScreenReaderDriverNVDA.cpp
++++ b/src/ScreenReaderDriverNVDA.cpp
+@@ -12,7 +12,7 @@
+ #include "ScreenReaderDriverNVDA.h"
+ 
+ ScreenReaderDriverNVDA::ScreenReaderDriverNVDA() :
+-  ScreenReaderDriver(L"NVDA", true, true),
++  ScreenReaderDriver(L"NVDA", true, false),
+   #ifdef _WIN64
+   controller(LoadLibrary(L"nvdaControllerClient64.dll")),
+   #else
+@@ -52,7 +52,7 @@ bool ScreenReaderDriverNVDA::Silence() {
+ }
+ 
+ bool ScreenReaderDriverNVDA::IsActive() {
+-  // This needs an extra check because System Access pretends to be NVDA.
+-  if (nvdaController_testIfRunning) return  (!!FindWindow(L"wxWindowClassNR", L"NVDA") && nvdaController_testIfRunning() == 0);
++  // The controller bridge is the speech backend even without an NVDA window.
++  if (nvdaController_testIfRunning) return nvdaController_testIfRunning() == 0;
+   return false;
+ }

@@ -1,0 +1,10 @@
+# Locally compiled bridge/probe binaries and device captures.
+*.exe
+*.dll
+*.apk
+*.o
+*.obj
+*.png
+*.wav
+*.log
+*.tmp

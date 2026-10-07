@@ -13,3 +13,28 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Android module output and local IDE/native build state.
+**/build/
+**/.gradle/
+**/.cxx/
+**/.externalNativeBuild/
+/.idea/
+*.log
+*.tmp
+*.hprof
+*.apk
+*.aab
+*.ap_
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
+
+# Packaged runtime assets, JNI libraries, and the Gradle wrapper are build
+# inputs. Do not ignore their DLL/EXE/SO/JAR/archive extensions globally.
+
+# Public forks cannot upload new LFS objects. Fetch this required large font
+# from the release with tools/fetch-build-font.py before building.
+/app/src/main/assets/audio_game_dependencies/breed_memorial_sourcehansans.ttc

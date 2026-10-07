@@ -1,0 +1,13 @@
+/* NVDA controller v1 wire interface, UUID and operation order from
+   nvaccess/nvda nvdaHelper/interfaces/nvdaController/nvdaController.idl.
+   Original interface is LGPL-2.1. */
+[
+    uuid(DFF50B99-F7FD-4ca7-A82C-DAEB3E025295),
+    version(1.0)
+]
+interface NvdaController {
+    error_status_t __stdcall testIfRunning();
+    error_status_t __stdcall speakText([in, string] const wchar_t *text);
+    error_status_t __stdcall cancelSpeech();
+    error_status_t __stdcall brailleMessage([in, string] const wchar_t *message);
+};

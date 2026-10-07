@@ -28,10 +28,15 @@ public class WindowManager extends XResourceManager {
     private final SparseArray<Window> windows = new SparseArray<>();
     public final DrawableManager drawableManager;
     private Window focusedWindow;
+    private com.winlator.core.Callback<String> focusTrace;
+
+    public void setFocusTrace(com.winlator.core.Callback<String> callback) { focusTrace = callback; }
     private FocusRevertTo focusRevertTo = FocusRevertTo.NONE;
     private final ArrayList<OnWindowModificationListener> onWindowModificationListeners = new ArrayList<>();
 
     public interface OnWindowModificationListener {
+        default void onDestroyWindow(Window window) {}
+
         default void onMapWindow(Window window) {}
 
         default void onUnmapWindow(Window window) {}
@@ -77,6 +82,15 @@ public class WindowManager extends XResourceManager {
         return null;
     }
 
+    public boolean hasWindowWithClassName(String className) {
+        if (className == null || className.isEmpty()) return false;
+        for (int i = 0; i < windows.size(); i++) {
+            Window window = windows.valueAt(i);
+            if (window != null && className.equalsIgnoreCase(window.getClassName())) return true;
+        }
+        return false;
+    }
+
     public void destroyWindow(int id) {
         Window window = getWindow(id);
         if (window != null && rootWindow.id != id) {
@@ -92,6 +106,9 @@ public class WindowManager extends XResourceManager {
         Window parent = window.getParent();
         window.sendEvent(Event.STRUCTURE_NOTIFY, new DestroyNotify(window, window));
         parent.sendEvent(Event.SUBSTRUCTURE_NOTIFY, new DestroyNotify(parent, window));
+        for (int i = onWindowModificationListeners.size()-1; i >= 0; i--) {
+            onWindowModificationListeners.get(i).onDestroyWindow(window);
+        }
         windows.remove(window.id);
         if (window.isInputOutput()) drawableManager.removeDrawable(window.getContent().id);
         triggerOnFreeResourceListener(window);
@@ -150,6 +167,13 @@ public class WindowManager extends XResourceManager {
 
     public void setFocus(Window focusedWindow, FocusRevertTo focusRevertTo) {
         Window oldFocus = this.focusedWindow;
+        if (focusTrace != null && oldFocus != focusedWindow) focusTrace.call(
+                "X11 focus from=" + (oldFocus != null ? oldFocus.id : 0) +
+                " to=" + (focusedWindow != null ? focusedWindow.id : 0) +
+                " class=" + (focusedWindow != null ? focusedWindow.getClassName() : "none") +
+                " enabled=" + (focusedWindow != null && focusedWindow.attributes.isEnabled()) +
+                " viewable=" + (focusedWindow != null && focusedWindow.attributes.isViewable()) +
+                " revert=" + focusRevertTo);
         // Clients may query GetInputFocus while processing FocusIn. Publish
         // the new state before writing the notifications to their streams.
         this.focusedWindow = focusedWindow;

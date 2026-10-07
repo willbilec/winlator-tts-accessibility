@@ -195,6 +195,12 @@ public class XServer {
         }
     }
 
+    public void injectKeyPress(XKeycode xKeycode, int keysym, boolean repeat) {
+        try (XLock lock = lock(Lockable.WINDOW_MANAGER, Lockable.INPUT_DEVICE)) {
+            keyboard.setKeyPress(xKeycode.id, keysym, repeat);
+        }
+    }
+
     private Extension[] setupExtensions() {
         byte opcode = Extension.START_MAJOR_OPCODE;
         Extension[] extensions = new Extension[]{

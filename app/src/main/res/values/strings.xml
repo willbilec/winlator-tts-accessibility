@@ -8,6 +8,10 @@
     <string name="shortcuts">Shortcuts</string>
     <string name="containers">Containers</string>
     <string name="input_controls">Input Controls</string>
+    <string name="short_dpad_taps">Single-step short arrow taps for this executable</string>
+    <string name="bavisoft_raw_queue">Bavisoft quick-tap keyboard compatibility</string>
+    <string name="input_controls_executable_scope">Executable: %1$s</string>
+    <string name="input_controls_executable_unknown">Executable not identified; per-game arrow setting is unavailable.</string>
     <string name="no_items_to_display">No items to display</string>
     <string name="new_container">New Container</string>
     <string name="edit_container">Edit Container</string>
@@ -295,6 +299,8 @@
     <string name="enable_background_protection_tooltip">Keep container alive in background or when device locked, but processes\'re paused.</string>
     <string name="enable_background_wakelock">Enable wakelock when the device is locked</string>
     <string name="enable_background_wakelock_tooltip">Avoid issues when returning after unlocking the device.</string>
+    <string name="auto_close_container">Automatically close container when guest processes exit</string>
+    <string name="auto_close_container_tooltip">Disable this for games whose updater temporarily closes the main game window.</string>
     <string name="capture_pointer_on_external_mouse">Capture pointer on external mouse</string>
     <string name="there_are_no_items_to_download">There are no items to download</string>
     <string name="enable_direct_rendering">Enable direct rendering</string>
@@ -307,6 +313,17 @@
     <string name="current">Current</string>
     <string name="capacity">Capacity</string>
     <string name="sound">Sound</string>
+    <string name="tts_section">TTS</string>
+    <string name="tts_engine">TTS engine</string>
+    <string name="tts_voice">Voice</string>
+    <string name="tts_rate">Speech rate</string>
+    <string name="tts_regular_rate">Regular TTS speed</string>
+    <string name="tts_nvda_rate">NVDA speech speed</string>
+    <string name="tts_rate_help">−10 is slowest, 0 is normal, +10 is fastest. Save and restart the container to apply. Games with their own TTS speed setting can override the regular speed.</string>
+    <string name="tts_control_interrupt">Use Control to stop screen reader speech</string>
+    <string name="reset_keyboard">Reset keyboard</string>
+    <string name="keyboard_reset_done">Keyboard reset. Held keys released.</string>
+    <string name="tts_system_default">System default</string>
     <string name="midi_soundfont">MIDI SoundFont</string>
     <string name="instrument">Instrument</string>
     <string name="channel">Channel</string>
@@ -357,4 +374,11 @@
     <string name="fgs_notification_content_else">Winlator is running in the background</string>
     <string name="save_mem_on_run_from_steam">Save memory on run from Steam</string>
     <string name="present_mode">Present Mode</string>
+    <string name="install_audio_game_dependencies">Install audio game dependencies</string>
+    <string name="audio_game_dependencies">Audio game dependencies</string>
+    <string name="installing_audio_game_dependencies">Installing audio game dependencies...</string>
+    <string name="audio_game_install_success">Dependencies installed for %1$s.</string>
+    <string name="audio_game_install_config_missing">Dependencies installed for %1$s, but its game folder was not found. Start the game once or verify its installation path.</string>
+    <string name="audio_game_install_failed">Could not install dependencies: %1$s</string>
+    <string name="breed_audio_keepalive">Breed Memorial audio compatibility (next launch)</string>
 </resources>

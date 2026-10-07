@@ -19,6 +19,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AlertDialog;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
@@ -31,6 +32,7 @@ import com.winlator.container.ContainerManager;
 import com.winlator.contentdialog.ContentDialog;
 import com.winlator.contentdialog.StorageInfoDialog;
 import com.winlator.core.PreloaderDialog;
+import com.winlator.core.AudioGameDependencyManager;
 import com.winlator.xenvironment.RootFS;
 
 import java.util.ArrayList;
@@ -149,6 +151,9 @@ public class ContainersFragment extends Fragment {
                     case R.id.menu_item_file_manager:
                         activity.showFragment(new ContainerFileManagerFragment(container.id));
                         break;
+                    case R.id.menu_item_audio_game_dependencies:
+                        showAudioGameDependencyPicker(activity, container);
+                        break;
                     case R.id.menu_item_edit:
                         activity.showFragment(new ContainerDetailFragment(container.id));
                         break;
@@ -177,6 +182,45 @@ public class ContainersFragment extends Fragment {
                 return true;
             });
             listItemMenu.show();
+        }
+
+        private void showAudioGameDependencyPicker(Activity activity, Container container) {
+            List<AudioGameDependencyManager.GameDefinition> games = AudioGameDependencyManager.getCatalog();
+            String[] labels = new String[games.size()];
+            for (int i = 0; i < games.size(); i++) {
+                AudioGameDependencyManager.GameDefinition game = games.get(i);
+                labels[i] = game.name + (AudioGameDependencyManager.isInstalled(container, game.id) ? " (installed)" : "")
+                        + " — " + game.description;
+            }
+            new AlertDialog.Builder(activity)
+                    .setTitle(R.string.audio_game_dependencies)
+                    .setItems(labels, (dialog, which) -> installAudioGame(activity, container, games.get(which)))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
+        }
+
+        private void installAudioGame(Activity activity, Container container, AudioGameDependencyManager.GameDefinition game) {
+            preloaderDialog.show(R.string.installing_audio_game_dependencies);
+            new Thread(() -> {
+                String message;
+                try {
+                    AudioGameDependencyManager.InstallResult result = AudioGameDependencyManager.install(activity, container, game.id);
+                    int resultMessage = result.configurationPrepared || !result.configurationRequired ?
+                            R.string.audio_game_install_success : R.string.audio_game_install_config_missing;
+                    message = activity.getString(resultMessage, game.name);
+                }
+                catch (Exception exception) {
+                    message = activity.getString(R.string.audio_game_install_failed, exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage());
+                }
+                String finalMessage = message;
+                activity.runOnUiThread(() -> {
+                    preloaderDialog.close();
+                    if (!activity.isFinishing()) new AlertDialog.Builder(activity)
+                            .setMessage(finalMessage)
+                            .setPositiveButton(android.R.string.ok, null)
+                            .show();
+                });
+            }, "WinlatorAudioGameInstaller").start();
         }
 
         private void runContainer(Container container) {

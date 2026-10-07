@@ -245,6 +245,53 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:id="@+id/TVSapiRate"
+                        android:labelFor="@id/SBSapiRate"
+                        android:text="@string/tts_regular_rate" />
+
+                    <SeekBar
+                        android:id="@+id/SBSapiRate"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:max="20" android:progress="10" />
+
+                    <TextView
+                        android:id="@+id/TVNvdaRate"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:labelFor="@id/SBNvdaRate"
+                        android:text="@string/tts_nvda_rate" />
+
+                    <SeekBar
+                        android:id="@+id/SBNvdaRate"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:max="20" android:progress="10" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/tts_rate_help" />
+                    <CheckBox
+                        android:id="@+id/CBNvdaControlInterrupt"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/tts_control_interrupt" />
+                </LinearLayout>
+
+                <TextView
+                    style="@style/FieldSetLabel"
+                    android:text="@string/tts_section" />
+            </FrameLayout>
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout style="@style/FieldSet">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
                         android:text="@string/language" />
 
                     <Spinner
@@ -309,6 +356,14 @@
                         android:visibility="gone"
                         android:text="@string/enable_background_wakelock"
                         android:tooltipText="@string/enable_background_wakelock_tooltip" />
+
+                    <CheckBox
+                        android:id="@+id/CBAutoCloseContainer"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/auto_close_container"
+                        android:tooltipText="@string/auto_close_container_tooltip" />
 
                     <CheckBox
                         android:id="@+id/CBSaveMemOnRunFromSteam"

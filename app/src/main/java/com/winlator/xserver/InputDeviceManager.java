@@ -19,6 +19,18 @@ public class InputDeviceManager implements Pointer.OnPointerMotionListener, Keyb
     private static final byte MOUSE_WHEEL_DELTA = 120;
     private Window pointWindow;
     private final XServer xServer;
+    private com.winlator.core.Callback<String> keyTrace;
+
+    public void setKeyTrace(com.winlator.core.Callback<String> callback) { keyTrace = callback; }
+
+    private void traceKey(byte keycode, String action, int target, String result) {
+        if (keyTrace == null) return;
+        if (keycode != XKeycode.KEY_RIGHT.id && keycode != XKeycode.KEY_LEFT.id &&
+                keycode != XKeycode.KEY_UP.id && keycode != XKeycode.KEY_DOWN.id &&
+                keycode != XKeycode.KEY_ENTER.id && keycode != XKeycode.KEY_TAB.id) return;
+        keyTrace.call("X11 key=" + (keycode & 255) + " action=" + action + " target=" + target +
+                " result=" + result + " uptime=" + android.os.SystemClock.uptimeMillis());
+    }
 
     public InputDeviceManager(XServer xServer) {
         this.xServer = xServer;
@@ -239,7 +251,7 @@ public class InputDeviceManager implements Pointer.OnPointerMotionListener, Keyb
     @Override
     public void onKeyPress(byte keycode, int keysym) {
         Window focusedWindow = xServer.windowManager.getFocusedWindow();
-        if (focusedWindow == null) return;
+        if (focusedWindow == null) { traceKey(keycode, "down", 0, "no focus"); return; }
         updatePointWindow();
 
         Window eventWindow = null;
@@ -249,11 +261,15 @@ public class InputDeviceManager implements Pointer.OnPointerMotionListener, Keyb
             child = eventWindow.isAncestorOf(pointWindow) ? pointWindow : null;
         }
         if (eventWindow == null) {
-            if (!focusedWindow.hasEventListenerFor(Event.KEY_PRESS)) return;
+            if (!focusedWindow.hasEventListenerFor(Event.KEY_PRESS)) {
+                traceKey(keycode, "down", focusedWindow.id, "no listener"); return;
+            }
             eventWindow = focusedWindow;
         }
 
-        if (!eventWindow.attributes.isEnabled()) return;
+        if (!eventWindow.attributes.isEnabled()) {
+            traceKey(keycode, "down", eventWindow.id, "disabled"); return;
+        }
 
         Bitmask keyButMask = getKeyButMask();
         short x = xServer.pointer.getX();
@@ -273,12 +289,13 @@ public class InputDeviceManager implements Pointer.OnPointerMotionListener, Keyb
         }
 
         eventWindow.sendEvent(Event.KEY_PRESS, new KeyPress(keycode, xServer.windowManager.rootWindow, eventWindow, child, x, y, localPoint[0], localPoint[1], keyButMask));
+        traceKey(keycode, "down", eventWindow.id, "sent");
     }
 
     @Override
     public void onKeyRelease(byte keycode) {
         Window focusedWindow = xServer.windowManager.getFocusedWindow();
-        if (focusedWindow == null) return;
+        if (focusedWindow == null) { traceKey(keycode, "up", 0, "no focus"); return; }
         updatePointWindow();
 
         Window eventWindow = null;
@@ -288,11 +305,15 @@ public class InputDeviceManager implements Pointer.OnPointerMotionListener, Keyb
             child = eventWindow.isAncestorOf(pointWindow) ? pointWindow : null;
         }
         if (eventWindow == null) {
-            if (!focusedWindow.hasEventListenerFor(Event.KEY_RELEASE)) return;
+            if (!focusedWindow.hasEventListenerFor(Event.KEY_RELEASE)) {
+                traceKey(keycode, "up", focusedWindow.id, "no listener"); return;
+            }
             eventWindow = focusedWindow;
         }
 
-        if (!eventWindow.attributes.isEnabled()) return;
+        if (!eventWindow.attributes.isEnabled()) {
+            traceKey(keycode, "up", eventWindow.id, "disabled"); return;
+        }
 
         Bitmask keyButMask = getKeyButMask();
         short x = xServer.pointer.getX();
@@ -307,6 +328,7 @@ public class InputDeviceManager implements Pointer.OnPointerMotionListener, Keyb
 
         short[] localPoint = eventWindow.rootPointToLocal(x, y);
         eventWindow.sendEvent(Event.KEY_RELEASE, new KeyRelease(keycode, xServer.windowManager.rootWindow, eventWindow, child, x, y, localPoint[0], localPoint[1], keyButMask));
+        traceKey(keycode, "up", eventWindow.id, "sent");
     }
 
     private Bitmask createPointerEventMask() {

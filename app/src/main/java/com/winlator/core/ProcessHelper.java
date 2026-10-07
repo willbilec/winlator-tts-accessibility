@@ -55,6 +55,58 @@ public abstract class ProcessHelper {
         Process.sendSignal(pid, OsConstants.SIGKILL);
     }
 
+    public static void killProcessTree(int rootPID) {
+        if (rootPID <= 0) return;
+
+        ArrayList<Integer> pending = new ArrayList<>();
+        ArrayList<Integer> descendants = new ArrayList<>();
+        pending.add(rootPID);
+
+        while (!pending.isEmpty()) {
+            int parentPID = pending.remove(pending.size() - 1);
+            File procFile = new File("/proc");
+            String[] pids = procFile.list((file, name) -> name.matches("[0-9]+"));
+            if (pids == null) break;
+            for (String pidString : pids) {
+                try (Scanner scanner = new Scanner(new FileInputStream("/proc/"+pidString+"/stat"))) {
+                    scanner.useDelimiter("\\A");
+                    String stat = scanner.next();
+                    int commandEnd = stat.lastIndexOf(')');
+                    if (commandEnd < 0) continue;
+                    String[] fields = stat.substring(commandEnd + 1).trim().split("\\s+", 3);
+                    if (fields.length < 2) continue;
+                    int processParentPID = Integer.parseInt(fields[1]);
+                    int processPID = Integer.parseInt(pidString);
+                    if (processParentPID == parentPID && !descendants.contains(processPID)) {
+                        descendants.add(processPID);
+                        pending.add(processPID);
+                    }
+                }
+                catch (Exception ignored) {}
+            }
+        }
+
+        for (int i = descendants.size() - 1; i >= 0; i--) killProcess(descendants.get(i));
+        killProcess(rootPID);
+    }
+
+    /** Stop native Wine processes that have been reparented to Android init. */
+    public static void killOwnedNativeProcesses() {
+        File procFile = new File("/proc");
+        String[] pids = procFile.list((file, name) -> name.matches("[0-9]+"));
+        if (pids == null) return;
+        int currentPID = Os.getpid();
+        int currentUID = Os.getuid();
+        for (String pidString : pids) {
+            try {
+                int processPID = Integer.parseInt(pidString);
+                if (processPID != currentPID && Os.stat("/proc/"+pidString).st_uid == currentUID)
+                    killProcess(processPID);
+            }
+            catch (Exception ignored) {}
+        }
+    }
+
     public static int exec(String command) {
         return exec(command, null);
     }

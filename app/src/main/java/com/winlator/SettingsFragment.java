@@ -4,9 +4,12 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ResolveInfo;
 import android.media.midi.MidiDeviceInfo;
 import android.media.midi.MidiManager;
 import android.net.Uri;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.Voice;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -14,6 +17,7 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
+import android.widget.AdapterView;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -68,6 +72,9 @@ import org.json.JSONException;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -79,6 +86,15 @@ public class SettingsFragment extends Fragment {
     private PreloaderDialog preloaderDialog;
     private SharedPreferences preferences;
     private boolean midiDeviceCallbackRegistered = false;
+    private TextToSpeech settingsTts;
+    private int settingsTtsGeneration;
+
+    private static final class TtsOption {
+        final String value;
+        final String label;
+        TtsOption(String value, String label) { this.value = value; this.label = label; }
+        @Override public String toString() { return label; }
+    }
 
     @Override
     public void onCreate(@Nullable Bundle savedInstanceState) {
@@ -121,6 +137,13 @@ public class SettingsFragment extends Fragment {
         final Spinner sMIDIInputDevice = view.findViewById(R.id.SMIDIInputDevice);
         String midiInputDevice = preferences.getString("midi_input_device", "auto");
         loadMIDIInputDeviceSpinner(sMIDIInputDevice, midiInputDevice);
+
+        final android.widget.SeekBar sbTtsRate = initSpeechRate(view, R.id.SBSapiRate,
+                R.id.TVSapiRate, R.string.tts_regular_rate, "sapi_tts_rate");
+        final android.widget.SeekBar sbNvdaRate = initSpeechRate(view, R.id.SBNvdaRate,
+                R.id.TVNvdaRate, R.string.tts_nvda_rate, "nvda_tts_rate");
+        final CheckBox cbNvdaControlInterrupt = view.findViewById(R.id.CBNvdaControlInterrupt);
+        cbNvdaControlInterrupt.setChecked(preferences.getBoolean("nvda_control_interrupt", true));
 
         final Spinner sBox64Version = view.findViewById(R.id.SBox64Version);
         String box64Version = preferences.getString("box64_version", null);
@@ -170,6 +193,9 @@ public class SettingsFragment extends Fragment {
             }
         });
         cbEnableBackgroundWakelock.setVisibility(cbEnableBackgroundProtection.isChecked() ? View.VISIBLE : View.GONE);
+
+        final CheckBox cbAutoCloseContainer = view.findViewById(R.id.CBAutoCloseContainer);
+        cbAutoCloseContainer.setChecked(preferences.getBoolean("auto_close_container", true));
 
         final CheckBox cbSaveMemOnRunFromSteam = view.findViewById(R.id.CBSaveMemOnRunFromSteam);
         cbSaveMemOnRunFromSteam.setChecked(preferences.getBoolean("save_mem_on_run_from_steam", true));
@@ -225,6 +251,9 @@ public class SettingsFragment extends Fragment {
         view.findViewById(R.id.BTConfirm).setOnClickListener((v) -> {
             SharedPreferences.Editor editor = preferences.edit();
             editor.putString("soundfont", sSoundFont.getSelectedItem().toString());
+            editor.putInt("sapi_tts_rate", sbTtsRate.getProgress() - 10);
+            editor.putInt("nvda_tts_rate", sbNvdaRate.getProgress() - 10);
+            editor.putBoolean("nvda_control_interrupt", cbNvdaControlInterrupt.isChecked());
             editor.putString("box64_version", StringUtils.parseIdentifier(sBox64Version.getSelectedItem()));
             editor.putString("box64_preset", Box64PresetManager.getSpinnerSelectedId(sBox64Preset));
             editor.putBoolean("move_cursor_to_touchpoint", cbMoveCursorToTouchpoint.isChecked());
@@ -239,6 +268,7 @@ public class SettingsFragment extends Fragment {
             editor.putBoolean("use_android_clipboard_on_wine", cbUseAndroidClipboardOnWine.isChecked());
             editor.putBoolean("enable_background_protection", cbEnableBackgroundProtection.isChecked());
             editor.putBoolean("enable_background_wakelock", cbEnableBackgroundWakelock.isChecked());
+            editor.putBoolean("auto_close_container", cbAutoCloseContainer.isChecked());
             editor.putBoolean("save_mem_on_run_from_steam", cbSaveMemOnRunFromSteam.isChecked());
             putGamepadPlayerConfigs(view, editor);
 
@@ -284,6 +314,107 @@ public class SettingsFragment extends Fragment {
         });
 
         return view;
+    }
+
+    @Override
+    public void onDestroyView() {
+        ++settingsTtsGeneration;
+        if (settingsTts != null) {
+            settingsTts.shutdown();
+            settingsTts = null;
+        }
+        super.onDestroyView();
+    }
+
+    private android.widget.SeekBar initSpeechRate(View view, int sliderId, int labelId,
+            int titleId, String preference) {
+        android.widget.SeekBar slider = view.findViewById(sliderId);
+        android.widget.TextView label = view.findViewById(labelId);
+        String title = getString(titleId);
+        slider.setMax(20);
+        slider.setProgress(Math.max(0, Math.min(20, preferences.getInt(preference, 0) + 10)));
+        label.setText(title + ": " + (slider.getProgress() - 10));
+        slider.setContentDescription(title + ": " + (slider.getProgress() - 10));
+        slider.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(android.widget.SeekBar bar, int progress, boolean fromUser) {
+                label.setText(title + ": " + (progress - 10));
+                bar.setContentDescription(title + ": " + (progress - 10));
+            }
+            @Override public void onStartTrackingTouch(android.widget.SeekBar bar) {}
+            @Override public void onStopTrackingTouch(android.widget.SeekBar bar) {}
+        });
+        return slider;
+    }
+
+    private void loadTtsEngines(Spinner engineSpinner, Spinner voiceSpinner) {
+        Context context = getContext();
+        ArrayList<TtsOption> engines = new ArrayList<>();
+        engines.add(new TtsOption("", getString(R.string.tts_system_default)));
+        List<ResolveInfo> installed = context.getPackageManager().queryIntentServices(
+                new Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0);
+        for (ResolveInfo info : installed) {
+            if (info.serviceInfo != null) {
+                engines.add(new TtsOption(info.serviceInfo.packageName,
+                        info.loadLabel(context.getPackageManager()).toString()));
+            }
+        }
+        engines.subList(1, engines.size()).sort(Comparator.comparing(option -> option.label));
+        engineSpinner.setAdapter(new ArrayAdapter<>(context,
+                android.R.layout.simple_spinner_dropdown_item, engines));
+        String selectedEngine = preferences.getString("tts_engine", "");
+        int position = 0;
+        for (int index = 1; index < engines.size(); ++index) {
+            if (engines.get(index).value.equals(selectedEngine)) { position = index; break; }
+        }
+        final String[] loadedEngine = {engines.get(position).value};
+        engineSpinner.setSelection(position);
+        loadTtsVoices(voiceSpinner, loadedEngine[0], preferences.getString("tts_voice", ""));
+        engineSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int index, long id) {
+                String selected = engines.get(index).value;
+                if (selected.equals(loadedEngine[0])) return;
+                loadedEngine[0] = selected;
+                loadTtsVoices(voiceSpinner, selected, "");
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+    }
+
+    private void loadTtsVoices(Spinner voiceSpinner, String engine, String preferredVoice) {
+        Context context = getContext();
+        int generation = ++settingsTtsGeneration;
+        if (settingsTts != null) settingsTts.shutdown();
+        ArrayList<TtsOption> defaults = new ArrayList<>();
+        defaults.add(new TtsOption("", getString(R.string.tts_system_default)));
+        voiceSpinner.setAdapter(new ArrayAdapter<>(context,
+                android.R.layout.simple_spinner_dropdown_item, defaults));
+        voiceSpinner.setEnabled(false);
+        TextToSpeech.OnInitListener listener = status ->
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    if (generation != settingsTtsGeneration || getContext() == null) return;
+                    ArrayList<TtsOption> voices = new ArrayList<>(defaults);
+                    if (status == TextToSpeech.SUCCESS && settingsTts != null) {
+                        Set<Voice> available = settingsTts.getVoices();
+                        if (available != null) {
+                            for (Voice voice : available) {
+                                voices.add(new TtsOption(voice.getName(), voice.getName() + " (" +
+                                        voice.getLocale().getDisplayName() + ")"));
+                            }
+                        }
+                    }
+                    voices.subList(1, voices.size()).sort(Comparator.comparing(option -> option.label));
+                    voiceSpinner.setAdapter(new ArrayAdapter<>(getContext(),
+                            android.R.layout.simple_spinner_dropdown_item, voices));
+                    for (int index = 1; index < voices.size(); ++index) {
+                        if (voices.get(index).value.equals(preferredVoice)) {
+                            voiceSpinner.setSelection(index);
+                            break;
+                        }
+                    }
+                    voiceSpinner.setEnabled(status == TextToSpeech.SUCCESS);
+                });
+        settingsTts = engine.isEmpty() ? new TextToSpeech(context, listener)
+                : new TextToSpeech(context, listener, engine);
     }
 
     private void loadGamepadModelSpinner(Spinner sGamepadModel) {

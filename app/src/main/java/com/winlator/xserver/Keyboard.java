@@ -48,6 +48,13 @@ public class Keyboard {
     }
 
     public void setKeyPress(byte keycode, int keysym) {
+        setKeyPress(keycode, keysym, false);
+    }
+
+    public void setKeyPress(byte keycode, int keysym, boolean repeat) {
+        // An Android repeat queued before a reset must not recreate a lost
+        // press. A fresh physical down (repeatCount == 0) starts the next hold.
+        if (repeat && !pressedKeys.contains(keycode)) return;
         if (isModifierSticky(keycode)) {
             if (pressedKeys.contains(keycode)) return;
             pressedKeys.add(keycode);
@@ -85,6 +92,22 @@ public class Keyboard {
 
     public void addOnKeyboardListener(OnKeyboardListener onKeyboardListener) {
         onKeyboardListeners.add(onKeyboardListener);
+    }
+
+    /** Caller holds the input-device and window-manager locks. Lock state stays
+     * unchanged, but missing key-up events must not suppress future presses. */
+    public void releasePressedKeys() {
+        while (!pressedKeys.isEmpty()) setKeyRelease(pressedKeys.valueAt(pressedKeys.size() - 1));
+    }
+
+    /** Caller holds the XServer locks. Send releases even if Android/X11
+     * disagreed about a previous key-up, then clear all transient state. */
+    public void reset() {
+        releasePressedKeys();
+        for (int code = MIN_KEYCODE; code <= MAX_KEYCODE; code++) {
+            triggerOnKeyRelease((byte)code);
+        }
+        modifiersMask.unset(1 | 4 | 8); // Shift, Control, Alt; retain lock state.
     }
 
     public void removeOnKeyboardListener(OnKeyboardListener onKeyboardListener) {
@@ -126,8 +149,11 @@ public class Keyboard {
                 boolean shortcut = physicalKeyboard && (
                     event.isCtrlPressed() || event.isAltPressed() || event.isMetaPressed()
                 );
-                int keysym = xKeycode != XKeycode.KEY_ENTER && !shortcut ? event.getUnicodeChar() : 0;
-                xServer.injectKeyPress(xKeycode, keysym);
+                // Android returns U+0009 for Tab. X11 needs XK_Tab (0xff09),
+                // already supplied by the guest keymap, for dialog navigation.
+                int keysym = xKeycode != XKeycode.KEY_ENTER && xKeycode != XKeycode.KEY_TAB &&
+                        !shortcut ? event.getUnicodeChar() : 0;
+                xServer.injectKeyPress(xKeycode, keysym, event.getRepeatCount() > 0);
             }
             else if (action == KeyEvent.ACTION_UP) {
                 if (!physicalKeyboard) xServer.injectKeyRelease(XKeycode.KEY_SHIFT_L);

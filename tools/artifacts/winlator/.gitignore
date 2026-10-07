@@ -1,0 +1,23 @@
+# This tree contains source tooling beside large local runtime downloads.
+# Publish source and documentation, keeping generated/downloaded data local.
+*
+!*/
+!.gitignore
+!*.md
+!*.c
+!*.h
+!*.def
+!*.idl
+!*.sh
+!*.py
+!*.ps1
+!*.patch
+
+# Entire generated, extracted, device, and recovery trees are local only.
+build/
+rollback/
+device/
+runtime/
+rhvoice/
+payload/
+__pycache__/
