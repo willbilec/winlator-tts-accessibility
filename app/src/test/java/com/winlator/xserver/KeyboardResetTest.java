@@ -6,6 +6,33 @@ import java.util.Set;
 import static org.junit.Assert.*;
 
 public class KeyboardResetTest {
+    @Test public void gestureReleaseDoesNotCutOffPhysicalHold() {
+        Keyboard keyboard = new Keyboard(null); Guest guest = new Guest(); keyboard.addOnKeyboardListener(guest);
+        keyboard.setKeyPress(XKeycode.KEY_RIGHT.id, 0);
+        keyboard.setGestureKeyPress(XKeycode.KEY_RIGHT.id);
+        keyboard.setGestureKeyRelease(XKeycode.KEY_RIGHT.id);
+        assertTrue(guest.held.contains(XKeycode.KEY_RIGHT.id));
+        assertEquals(1, guest.presses);
+        keyboard.setKeyRelease(XKeycode.KEY_RIGHT.id);
+        assertTrue(guest.held.isEmpty());
+    }
+    @Test public void physicalReleaseDoesNotCutOffGestureHold() {
+        Keyboard keyboard = new Keyboard(null); Guest guest = new Guest(); keyboard.addOnKeyboardListener(guest);
+        keyboard.setGestureKeyPress(XKeycode.KEY_RIGHT.id);
+        keyboard.setKeyPress(XKeycode.KEY_RIGHT.id, 0);
+        keyboard.setKeyRelease(XKeycode.KEY_RIGHT.id);
+        assertTrue(guest.held.contains(XKeycode.KEY_RIGHT.id));
+        keyboard.setGestureKeyRelease(XKeycode.KEY_RIGHT.id);
+        assertTrue(guest.held.isEmpty());
+    }
+    @Test public void resetDropsGestureOwnershipWithoutReplayingPhysicalRepeats() {
+        Keyboard keyboard = new Keyboard(null); Guest guest = new Guest(); keyboard.addOnKeyboardListener(guest);
+        keyboard.setGestureKeyPress(XKeycode.KEY_ENTER.id);
+        keyboard.reset(); assertTrue(guest.held.isEmpty());
+        keyboard.setKeyPress(XKeycode.KEY_ENTER.id, 0, true); assertTrue(guest.held.isEmpty());
+        keyboard.setKeyPress(XKeycode.KEY_ENTER.id, 0); keyboard.setGestureKeyRelease(XKeycode.KEY_ENTER.id);
+        assertTrue(guest.held.contains(XKeycode.KEY_ENTER.id));
+    }
     private static final class Guest implements Keyboard.OnKeyboardListener {
         final Set<Byte> held = new HashSet<>();
         int presses;

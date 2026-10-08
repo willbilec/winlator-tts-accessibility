@@ -188,10 +188,17 @@ public class ShortcutsFragment extends BaseFileManagerFragment<Shortcut> {
             menu.findItem(R.id.menu_item_rename).setVisible(false);
             menu.findItem(R.id.menu_item_add_favorite).setVisible(false);
             menu.findItem(R.id.menu_item_info).setVisible(false);
+            menu.findItem(R.id.menu_item_gesture_management).setVisible(!shortcut.file.isDirectory());
 
             listItemMenu.setOnMenuItemClickListener((menuItem) -> {
                 int itemId = menuItem.getItemId();
                 switch (itemId) {
+                    case R.id.menu_item_gesture_management:
+                        com.winlator.contentdialog.GestureManagementDialog.show(context,
+                                com.winlator.gestures.GestureSettings.open(context),
+                                com.winlator.gestures.GestureSettings.target(shortcut.container,
+                                        shortcut.isLinkPath() ? null : shortcut.path, shortcut.name), () -> {}, () -> {});
+                        break;
                     case R.id.menu_item_settings:
                         clearClipboard();
                         (new ShortcutSettingsDialog(ShortcutsFragment.this, shortcut)).show();

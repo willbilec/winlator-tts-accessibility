@@ -63,7 +63,9 @@ Build success, generated audio, and RPC return codes do not establish audible
 speech. After native changes, test fresh 32-bit and 64-bit guest speech, then
 affected games' speech, Control cancellation, windows, and keyboard input.
 
-The published Build 94 is an existing debug APK. It was not rebuilt for the
-publication commit; documentation and repository-layout changes were made for
-publication. Its embedded speech, game-dependency, and keyboard assets were
-checked against the current local source assets before uploading.
+The published Build 100 is the existing tested debug APK. Publication changes
+documentation and native script paths to match this repository layout. Gradle
+does not rebuild the native browser either; run its builder from the repository
+root with `bash tools/artifacts/winlator/file-browser/build.sh` after changes.
+The browser diagnostic executable is packaged only in the Android test APK.
+Embedded runtime assets are checked against source assets before uploading.

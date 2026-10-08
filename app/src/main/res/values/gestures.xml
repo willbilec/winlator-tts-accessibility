@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gesture_management">Gesture management</string>
+    <string name="gesture_game">Gesture map for game</string>
+    <string name="gesture_global">Global default gesture map</string>
+    <string name="gesture_control_mode">Gameplay control mode</string>
+    <string name="gesture_inherited">global default</string>
+    <string name="gesture_inherited_binding">Global default: %1$s</string>
+    <string name="gesture_use_global_binding">Use global default: %1$s</string>
+    <string name="gesture_use_global">Use global default</string>
+    <string name="gesture_unassigned">Unassigned</string>
+    <string name="gesture_search_keys">Search keys</string>
+    <string name="gesture_close">Close</string>
+    <string name="gesture_swipe_behavior">Swipe behavior for this game</string>
+    <string name="gesture_swipe_quick">Quick presses</string>
+    <string name="gesture_swipe_hold">Hold until finger lift</string>
+    <string name="gesture_swipe_inherit">Use global default: %1$s</string>
+    <string name="gesture_pad_help">Hold until finger lift keeps a swipe key down while you touch the screen. Stationary long presses use their own assignments. Assigned double or triple taps delay single taps. Four-finger tap opens the game menu.</string>
+    <string name="gesture_screen_reader_help">Setup works with your screen reader. During gameplay, touch exploration may capture gestures. Pause your screen reader using its shortcut if needed; resume it for menus. Winlator cannot turn it off automatically.</string>
+    <string name="gesture_swipe_up">Swipe up</string>
+    <string name="gesture_swipe_down">Swipe down</string>
+    <string name="gesture_swipe_left">Swipe left</string>
+    <string name="gesture_swipe_right">Swipe right</string>
+    <string name="gesture_tap">Tap</string>
+    <string name="gesture_double_tap">Double tap</string>
+    <string name="gesture_triple_tap">Triple tap</string>
+    <string name="gesture_hold">Long press</string>
+    <plurals name="gesture_fingers">
+        <item quantity="one">%d finger</item>
+        <item quantity="other">%d fingers</item>
+    </plurals>
+    <string-array name="gesture_modes">
+        <item>Automatic</item>
+        <item>Gestures</item>
+        <item>Touchpad</item>
+    </string-array>
+</resources>

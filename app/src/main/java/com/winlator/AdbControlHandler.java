@@ -27,6 +27,17 @@ final class AdbControlHandler {
             }
             else if ("get".equals(action)) {
                 String setting = requireExtra(source, "setting");
+                if ("gestureState".equals(setting)) {
+                    Log.i(TAG, XServerDisplayActivity.getGestureState());
+                    return;
+                }
+                if ("gestureSwipeHolds".equals(setting)) {
+                    com.winlator.gestures.GestureMapStore store = com.winlator.gestures.GestureSettings.open(context);
+                    com.winlator.gestures.GestureMapStore.Target target = com.winlator.gestures.GestureSettings.target(
+                            container, source.getStringExtra("executable"), null);
+                    Log.i(TAG, "gestureSwipeHolds=" + store.swipeHolds(target));
+                    return;
+                }
                 if ("shortDpadTaps".equals(setting)) {
                     String executable = requireExtra(source, "executable");
                     String normalized = ExecutableInputSettings.normalizeExecutable(container, executable);
@@ -44,6 +55,21 @@ final class AdbControlHandler {
             else if ("set".equals(action)) {
                 String setting = requireExtra(source, "setting");
                 String value = requireExtra(source, "value");
+                if ("gestureSwipeHolds".equals(setting)) {
+                    com.winlator.gestures.GestureMapStore store = com.winlator.gestures.GestureSettings.open(context);
+                    com.winlator.gestures.GestureMapStore.Target target = com.winlator.gestures.GestureSettings.target(
+                            container, source.getStringExtra("executable"), null);
+                    if (source.hasExtra("executable") && target == null) throw new IllegalArgumentException("An executable path is required");
+                    Boolean enabled;
+                    if ("true".equals(value)) enabled = true;
+                    else if ("false".equals(value)) enabled = false;
+                    else if ("default".equals(value) && target != null) enabled = null;
+                    else throw new IllegalArgumentException("gestureSwipeHolds must be true, false, or per-game default");
+                    store.setSwipeHolds(target, enabled);
+                    XServerDisplayActivity.refreshGestureSettings();
+                    Log.i(TAG, "Updated gestureSwipeHolds=" + store.swipeHolds(target));
+                    return;
+                }
                 if ("shortDpadTaps".equals(setting)) {
                     String executable = requireExtra(source, "executable");
                     boolean enabled;

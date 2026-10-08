@@ -46,6 +46,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
     private String box64Preset = Box64Preset.CONSERVATIVE;
     private Callback<Integer> terminationCallback;
     private String autoExitTargetExecutable;
+    private boolean monitorProgramExit;
     private volatile boolean autoExitRunning;
     private Thread autoExitMonitor;
     private boolean terminationReported;
@@ -73,7 +74,7 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
             pid = launchedPid;
             if (pid != -1 && preLaunchGuestExecutable != null) startPreLaunchWatchdog();
             SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(environment.getContext());
-            if (pid != -1 && preferences.getBoolean("auto_close_container", true)) startAutoExitMonitor();
+            if (pid != -1 && (monitorProgramExit || preferences.getBoolean("auto_close_container", true))) startAutoExitMonitor();
             else if (pid != -1) android.util.Log.i("WinlatorExitMonitor", "Automatic container close disabled by settings");
         }
     }
@@ -114,6 +115,10 @@ public class GuestProgramLauncherComponent extends EnvironmentComponent {
 
     public void setAutoExitTargetExecutable(String executableName) {
         autoExitTargetExecutable = executableName == null ? null : executableName.trim().toLowerCase(Locale.ROOT);
+    }
+
+    public void setMonitorProgramExit(boolean enabled) {
+        monitorProgramExit = enabled;
     }
 
     private void startAutoExitMonitor() {

@@ -359,6 +359,8 @@ public class ContainerFileManagerFragment extends BaseFileManagerFragment<FileIn
 
             Menu menu = listItemMenu.getMenu();
             menu.findItem(R.id.menu_item_settings).setVisible(false);
+            menu.findItem(R.id.menu_item_gesture_management).setVisible(
+                    file.type == FileInfo.Type.FILE && file.path.toLowerCase(java.util.Locale.ROOT).endsWith(".exe"));
 
             if (folderStack.isEmpty()) {
                 menu.findItem(R.id.menu_item_cut).setVisible(false);
@@ -373,6 +375,11 @@ public class ContainerFileManagerFragment extends BaseFileManagerFragment<FileIn
             listItemMenu.setOnMenuItemClickListener((menuItem) -> {
                 int itemId = menuItem.getItemId();
                 switch (itemId) {
+                    case R.id.menu_item_gesture_management:
+                        com.winlator.contentdialog.GestureManagementDialog.show(context,
+                                com.winlator.gestures.GestureSettings.open(context),
+                                com.winlator.gestures.GestureSettings.target(container, file.path, file.name), () -> {}, () -> {});
+                        break;
                     case R.id.menu_item_copy:
                     case R.id.menu_item_cut:
                         instantiateClipboard(file, itemId == R.id.menu_item_cut);

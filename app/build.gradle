@@ -8,14 +8,16 @@ android {
         applicationId 'com.winlator'
         minSdkVersion 26
         targetSdkVersion 28
-        versionCode 94
-        versionName "11.2-tts55-auto-game-dependencies"
+        versionCode 100
+        versionName "11.2-tts61-browser-favorites-exit"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         debug {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            testProguardFile '../gesture-test-rules.pro'
 
             ndk {
                 abiFilters 'arm64-v8a'
@@ -39,6 +41,9 @@ android {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     implementation 'androidx.appcompat:appcompat:1.4.0'
     implementation 'androidx.preference:preference:1.2.1'
     implementation 'com.google.android.material:material:1.4.0'

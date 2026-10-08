@@ -84,6 +84,62 @@ menu workaround and is not accepted for complete gameplay; do not treat the
 earlier menu result as shooting acceptance. The investigation is recorded in
 the workspace's `artifacts/winlator/GRIZZLY_INPUT_INVESTIGATION.md`.
 
+## Gesture input diagnostics
+
+Read the current session without changing its gesture map or sending keys:
+
+```sh
+adb shell am broadcast -n com.winlator/.AdbControlReceiver \
+  --es action get --ei container_id 1 --es setting gestureState
+adb logcat -d -s WinlatorAdbControl:I
+```
+
+The result includes Automatic/Gestures/Touchpad mode, physical-keyboard count,
+whether the pad is accepting touches, its dimensions, active game identity,
+effective bindings, delivered-key count, and mean/maximum recognition-to-X11
+delivery time in microseconds. Timing starts after gesture recognition and ends
+after XServer keyboard delivery; it excludes tap/chord recognition waits,
+the 30 ms release interval, Wine handling, game polling, and audible response.
+No per-key log or disk write runs in the gesture path. Touch-exploration status
+is reported separately; Winlator does not disable the reader or claim that
+hiding the pad from accessibility bypasses touch interception.
+
+The Arrow Key Checker is a separate Windows diagnostic in Container 1 at
+`C:\NVDA-Bridge\gesture-input-probe.exe`. It speaks arrow press/release transitions,
+displays all currently held arrows, and writes `gesture-input-probe.log` beside
+the executable. Keyboard repeats do not repeat its speech announcements.
+Its shortcut is **Arrow Key Checker** in Winlator. The source is
+`artifacts/winlator/gesture-keyboard/input-probe.c` in the parent workspace.
+
+Change swipe behavior for one executable (omit `executable` to change the global
+default). Values are `true` for Hold until finger lift, `false` for Quick presses,
+or `default` to remove a game override and inherit the global setting:
+
+```sh
+adb shell am broadcast -n com.winlator/.AdbControlReceiver \
+  --es action set --ei container_id 1 --es setting gestureSwipeHolds \
+  --es value true --es executable '"C:\NVDA-Bridge\gesture-input-probe.exe"'
+adb shell am broadcast -n com.winlator/.AdbControlReceiver \
+  --es action get --ei container_id 1 --es setting gestureSwipeHolds \
+  --es executable '"C:\NVDA-Bridge\gesture-input-probe.exe"'
+```
+
+The inner double quotes preserve backslashes through the Android shell. Changes
+persist and apply to an active gesture session immediately, cancelling pending
+input first. `gestureState` also reports the active `swipeHolds` value. This is
+independent of the game's stationary long-press key assignments.
+
+The Android diagnostic test requires Container 1 and the deployed checker. It
+restarts that diagnostic guest session; do not run it while the user is testing
+or playing. Reopen the checker afterward. It saves/restores the gesture mode,
+stationary-hold binding and per-game swipe behavior it temporarily changes:
+
+```sh
+adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w -r -e class com.winlator.gestures.GestureDeviceTest \
+  com.winlator.test/androidx.test.runner.AndroidJUnitRunner
+```
+
 ## Results and errors
 
 The receiver logs its result or validation error under `WinlatorAdbControl`:

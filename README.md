@@ -12,8 +12,8 @@ a small set of games and one Android device. This is an unofficial fork.
 
 Get the latest APK from the
 [Releases page](https://github.com/willbilec/winlator-tts-accessibility/releases).
-The first published build is **Build 94**, version
-`11.2-tts55-auto-game-dependencies`. It is an ARM64 debug build for Android 8.0
+The latest published build is **Build 100**, version
+`11.2-tts61-browser-favorites-exit`. It is an ARM64 debug build for Android 8.0
 or later, intended for early testing.
 
 The app uses Winlator's existing `com.winlator` package ID. Updating an existing
@@ -34,6 +34,38 @@ do not match, do not uninstall your existing app until your data is backed up.
 - Keyboard reset and recovery controls, plus quick-tap keyboard compatibility
   for Grizzly Gulch and Chillingham.
 - Compatibility work for Super Liam and Breed Memorial.
+- Configurable gesture keyboard controls, with global defaults and per-game
+  mappings, quick presses or swipe holds, and automatic physical-keyboard switching.
+- A speaking file browser on container **Run**, with Favorites, file operations,
+  game launching, shortcut creation, and return to the saved folder after a game exits.
+
+## New in Build 100
+
+Container **Run** opens the speaking browser at Favorites, followed by drives,
+with Exit last. Up/Down select and speak, Enter opens, Left goes back, and Right
+opens actions. Actions include copy/cut/paste, rename, confirmed permanent delete,
+new folder, go to path, properties, and game shortcut creation. Text entry offers
+a spoken character picker. Programs use the normal dependency and game-settings
+launch flow; normal program exit restores the browser's folder and selection,
+including when automatic container closing is disabled. Exit returns to Winlator.
+See [browser controls and limits](tools/artifacts/winlator/file-browser/README.md).
+
+The gesture changes from Builds 95–98 are included. Open **Gesture management**
+from the in-game menu, a game shortcut menu, or an executable file menu. The
+selector offers the global map, current game, and ten recent games. One-finger
+swipes default to arrow keys and a tap to Enter. One-, two-, and three-finger
+swipes, single/double/triple taps, and stationary long presses can be assigned
+through a searchable key picker. Four-finger tap opens the game menu.
+
+Mappings inherit global defaults unless overridden or explicitly unassigned.
+Each game can use **Quick presses** or **Hold until finger lift** for swipes.
+Stationary long presses hold their assigned key until lift. Unassigned longer
+taps do not delay single taps. Settings save immediately; equivalent Android and
+DOS launch paths share a game's settings. **Automatic** control mode uses gestures
+when no physical keyboard is connected; **Gestures** and **Touchpad** are manual
+overrides. Menus, cancellation, rotation, backgrounding, and keyboard changes
+release gesture-owned keys. TalkBack may intercept gameplay gestures; pause it
+with its shortcut if needed and resume it for accessible settings.
 
 Speech setup runs automatically during normal container startup. Game files and
 licenses are not included. Install your game, launch its executable through
@@ -46,7 +78,17 @@ speech speed settings.
 Audible speech has been confirmed in Manamon 2, Super Liam, Arcadelux, and Breed
 Memorial across development builds. Quick taps were confirmed in Chillingham
 after its keyboard fix. These reports are not a guarantee that every game or
-device works, or a complete retest of every feature in Build 94.
+device works, or a complete retest of every feature in Build 100.
+
+Build 100 passed 56 unit tests and native browser filesystem/control and protocol
+checks. Device diagnostics checked browser speech calls, shortcut paths, launch
+and return with automatic closing disabled, Favorites navigation, and Exit.
+The user confirmed the Build 99 browser works and Build 95's four arrow gestures
+are responsive. Build 98 instrumentation checked accessible gesture selection,
+arrow/Enter delivery to a Wine diagnostic window, holds, cancellation, and path
+alias handling. These diagnostics do not establish TalkBack pass-through or
+audible playback. Build 100's added entries' audible usability and affected real
+games' launch, input, cancellation, return, and long holds still need confirmation.
 
 This fork provides game speech. It does not provide full Windows screen reading,
 general Wine menu or dialog accessibility, or braille. Arcadelux still has
@@ -77,7 +119,7 @@ Use JDK 17, Android SDK 35, NDK `24.0.8215888`, and CMake `3.22.1`. Configure yo
 Android SDK path through `local.properties` or `ANDROID_HOME`, then run:
 
 ```sh
-./gradlew testDebugUnitTest assembleDebug --no-daemon --console=plain
+./gradlew testDebugUnitTest assembleDebug --no-daemon --console=plain -Dorg.gradle.jvmargs=-Xmx4g --max-workers=2
 ```
 
 The font script requires Python 3 and verifies the download's SHA-256. The font

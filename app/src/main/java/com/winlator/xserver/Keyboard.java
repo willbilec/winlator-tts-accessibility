@@ -19,6 +19,8 @@ public class Keyboard {
     private final Bitmask modifiersMask = new Bitmask();
     private final XKeycode[] keycodeMap = createKeycodeMap();
     private final ArraySet<Byte> pressedKeys = new ArraySet<>();
+    private final ArraySet<Byte> externalPressedKeys = new ArraySet<>();
+    private final ArraySet<Byte> gesturePressedKeys = new ArraySet<>();
     private final ArrayList<OnKeyboardListener> onKeyboardListeners = new ArrayList<>();
     private final XServer xServer;
 
@@ -54,7 +56,23 @@ public class Keyboard {
     public void setKeyPress(byte keycode, int keysym, boolean repeat) {
         // An Android repeat queued before a reset must not recreate a lost
         // press. A fresh physical down (repeatCount == 0) starts the next hold.
-        if (repeat && !pressedKeys.contains(keycode)) return;
+        if (repeat && !externalPressedKeys.contains(keycode)) return;
+        externalPressedKeys.add(keycode);
+        pressOwnedKey(keycode, keysym);
+    }
+
+    /** Caller holds XServer locks. Overlapping input sources must not release each other's holds. */
+    public void setGestureKeyPress(byte keycode) {
+        gesturePressedKeys.add(keycode);
+        pressOwnedKey(keycode, 0);
+    }
+
+    public void setGestureKeyRelease(byte keycode) {
+        gesturePressedKeys.remove(keycode);
+        if (!externalPressedKeys.contains(keycode)) releaseOwnedKey(keycode);
+    }
+
+    private void pressOwnedKey(byte keycode, int keysym) {
         if (isModifierSticky(keycode)) {
             if (pressedKeys.contains(keycode)) return;
             pressedKeys.add(keycode);
@@ -72,6 +90,11 @@ public class Keyboard {
     }
 
     public void setKeyRelease(byte keycode) {
+        externalPressedKeys.remove(keycode);
+        if (!gesturePressedKeys.contains(keycode)) releaseOwnedKey(keycode);
+    }
+
+    private void releaseOwnedKey(byte keycode) {
         if (pressedKeys.contains(keycode)) {
             // X11 reports the modifier state from before the release.
             triggerOnKeyRelease(keycode);
@@ -97,7 +120,9 @@ public class Keyboard {
     /** Caller holds the input-device and window-manager locks. Lock state stays
      * unchanged, but missing key-up events must not suppress future presses. */
     public void releasePressedKeys() {
-        while (!pressedKeys.isEmpty()) setKeyRelease(pressedKeys.valueAt(pressedKeys.size() - 1));
+        externalPressedKeys.clear();
+        gesturePressedKeys.clear();
+        while (!pressedKeys.isEmpty()) releaseOwnedKey(pressedKeys.valueAt(pressedKeys.size() - 1));
     }
 
     /** Caller holds the XServer locks. Send releases even if Android/X11

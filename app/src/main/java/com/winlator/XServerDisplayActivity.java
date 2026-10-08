@@ -55,6 +55,8 @@ import com.winlator.core.EnvVars;
 import com.winlator.core.ExecutableInputSettings;
 import com.winlator.core.FileUtils;
 import com.winlator.core.AudioGameDependencyManager;
+import com.winlator.core.AccessibleFileBrowser;
+import com.winlator.winhandler.FileBrowserBridge;
 import com.winlator.core.GeneralComponents;
 import com.winlator.core.KeyValueSet;
 import com.winlator.core.LocaleHelper;
@@ -152,6 +154,13 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private boolean shortDpadTapFilterEnabled;
     private boolean bavisoftRawQueueEnabled;
     private String currentExecutablePath = "";
+    private com.winlator.gestures.GestureMapStore gestureMaps;
+    private com.winlator.gestures.GestureMapStore.Target gestureTarget;
+    private com.winlator.widget.GesturePadView gesturePad;
+    private com.winlator.gestures.GestureKeyDispatcher gestureKeys;
+    private boolean gestureResumed, gestureMenuVisible, gestureDialogOpen;
+    private long gestureRecognizedAt, gestureDeliveryCount, gestureDeliveryNanos, gestureDeliveryMaxNanos;
+    private String gestureLastKey = "";
     private final Handler shortDpadTapHandler = new Handler(Looper.getMainLooper());
     private final HashMap<Integer, PendingDpadTap> pendingDpadTaps = new HashMap<>();
     private final HashSet<Integer> filteredHeldDpadKeys = new HashSet<>();
@@ -195,6 +204,9 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private Win32AppWorkarounds win32AppWorkarounds;
     private String screenEffectProfile;
     private String autoExitWindowClass;
+    private FileBrowserBridge fileBrowserBridge;
+    private Intent nextBrowserSession;
+    private boolean browserTransition;
     private boolean sessionStopped;
     private AndroidSpeechBridge androidSpeechBridge;
     private PreloaderDialog preloaderDialog;
@@ -218,11 +230,17 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         drawerLayout.setOnApplyWindowInsetsListener((view, windowInsets) -> windowInsets.replaceSystemWindowInsets(0, 0, 0, 0));
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
         drawerLayout.addDrawerListener(new DrawerLayout.SimpleDrawerListener() {
+            @Override public void onDrawerSlide(@NonNull View drawerView, float slideOffset) {
+                gestureMenuVisible = slideOffset > 0;
+                updateGestureMode();
+            }
             @Override public void onDrawerOpened(@NonNull View drawerView) {
                 resetKeyboardState("game menu opened");
             }
             @Override public void onDrawerClosed(@NonNull View drawerView) {
-                if (touchpadView != null) touchpadView.requestFocus();
+                gestureMenuVisible = false;
+                updateGestureMode();
+                if (!gestureDialogOpen && xServerView != null) xServerView.requestFocus();
             }
         });
 
@@ -323,7 +341,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         xServer.windowManager.addOnWindowModificationListener(new WindowManager.OnWindowModificationListener() {
             @Override
             public void onDestroyWindow(Window window) {
-                if (!preferences.getBoolean("auto_close_container", true)) return;
+                if (!preferences.getBoolean("auto_close_container", true) && !getIntent().getBooleanExtra("return_to_browser", false)) return;
                 String destroyedClass = window.getClassName();
                 if (autoExitWindowClass == null || !autoExitWindowClass.equalsIgnoreCase(destroyedClass)) return;
                 if (guestSessionLog != null) guestSessionLog.call(
@@ -331,12 +349,12 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                     boolean guestProcessAlive = guestProgramLauncherComponent != null &&
                             guestProgramLauncherComponent.hasLiveTrackedProcesses();
-                    if (preferences.getBoolean("auto_close_container", true) && !sessionStopped && xServer != null &&
+                    if ((preferences.getBoolean("auto_close_container", true) || getIntent().getBooleanExtra("return_to_browser", false)) && !sessionStopped && xServer != null &&
                             !guestProcessAlive &&
                             !xServer.windowManager.hasWindowWithClassName(autoExitWindowClass)) {
                         if (guestSessionLog != null) guestSessionLog.call(
                                 "X11 target window stayed closed; stopping container session");
-                        exit();
+                        onGuestProgramEnded(0);
                     }
                     else if (guestProcessAlive && guestSessionLog != null) guestSessionLog.call(
                             "X11 target window closed while a tracked guest process remains; keeping container session");
@@ -406,6 +424,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        updateGestureMode();
         setKeyboardCaptureEnabled(hasFocus);
         if (!hasFocus && xServer != null) {
             clearShortDpadTapState();
@@ -430,8 +449,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     @Override
     public void onResume() {
         super.onResume();
+        gestureResumed = true;
+        if (gestureMaps != null) gestureMaps.reload();
         setKeyboardCaptureEnabled(true);
         registerKeyboardListener();
+        updateGestureMode();
         if (environment != null) {
             xServerView.onResume();
             environment.onResume();
@@ -441,6 +463,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
     @Override
     public void onPause() {
+        gestureResumed = false;
+        updateGestureMode();
         setKeyboardCaptureEnabled(false);
         unregisterKeyboardListener();
         clearShortDpadTapState();
@@ -462,10 +486,12 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         ForegroundService.setPipMode(isInPictureInPictureMode);
+        updateGestureMode();
     }
 
     @Override
     protected void onDestroy() {
+        if (gesturePad != null) gesturePad.cancel();
         clearShortDpadTapState();
         stopSessionComponents();
         if (guestSessionLog != null) {
@@ -475,6 +501,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         if (activeInstance.get() == this) activeInstance.clear();
         ForegroundService.stopSession(this);
         super.onDestroy();
+        // The old guest, audio and listeners are gone before creating the next session.
+        if (nextBrowserSession != null) startActivity(nextBrowserSession);
     }
 
     private void setKeyboardCaptureEnabled(boolean enabled) {
@@ -503,6 +531,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         keyboardInputManager.registerInputDeviceListener(keyboardDeviceListener,
                 new android.os.Handler(android.os.Looper.getMainLooper()));
         keyboardListenerRegistered = true;
+        updateGestureMode();
     }
 
     private void unregisterKeyboardListener() {
@@ -514,6 +543,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     }
 
     private void resetKeyboardState(String reason) {
+        if (gesturePad != null) gesturePad.cancel();
+        updateGestureMode();
         clearShortDpadTapState();
         if (xServer == null || sessionStopped) return;
         try (com.winlator.xserver.XLock lock = xServer.lock(
@@ -547,6 +578,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     private synchronized void stopSessionComponents() {
         if (sessionStopped) return;
         sessionStopped = true;
+        if (fileBrowserBridge != null) {
+            fileBrowserBridge.close();
+            fileBrowserBridge = null;
+        }
+        if (gesturePad != null) gesturePad.cancel();
         unregisterKeyboardListener();
         nativeSpeechControl.close();
         if (androidSpeechBridge != null) {
@@ -581,6 +617,18 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                 break;
             case R.id.menu_item_input_controls:
                 showInputControlsDialog();
+                drawerLayout.closeDrawers();
+                break;
+            case R.id.menu_item_gesture_management:
+                gestureDialogOpen = true;
+                if (gesturePad != null) gesturePad.cancel();
+                updateGestureMode();
+                com.winlator.contentdialog.GestureManagementDialog.show(this, gestureMaps, gestureTarget,
+                        () -> { gesturePad.cancel(); updateGestureMode(); }, () -> {
+                            gestureDialogOpen = false;
+                            updateGestureMode();
+                            if (xServerView != null) xServerView.requestFocus();
+                        });
                 drawerLayout.closeDrawers();
                 break;
             case R.id.menu_item_toggle_fullscreen:
@@ -642,6 +690,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     }
 
     private void exit() {
+        nextBrowserSession = null;
         stopSessionComponents();
 
         Intent intent = getIntent();
@@ -653,6 +702,64 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         }
         else AppUtils.restartApplication(this);
         ForegroundService.stopSession(this);
+    }
+
+    private void replaceBrowserSession(Intent next) {
+        if (sessionStopped || browserTransition || isFinishing()) return;
+        browserTransition = true;
+        nextBrowserSession = next;
+        stopSessionComponents();
+        finish();
+    }
+
+    private void onGuestProgramEnded(int status) {
+        runOnUiThread(() -> {
+            if (sessionStopped || browserTransition || isFinishing()) return;
+            if (getIntent().getBooleanExtra("return_to_browser", false)) {
+                Intent next = new Intent(this, XServerDisplayActivity.class);
+                next.putExtra("container_id", container.id);
+                next.putExtra("browser_resume", true);
+                next.putExtra("browser_launch_status", status);
+                replaceBrowserSession(next);
+            } else if (isFileBrowserSession() || preferences.getBoolean("auto_close_container", true)) exit();
+            else if (guestSessionLog != null) guestSessionLog.call("Guest ended; automatic close disabled");
+        });
+    }
+
+    private boolean isFileBrowserSession() {
+        return !isGenerateWineprefix() && shortcut == null && !getIntent().hasExtra("exec_path");
+    }
+
+    private String prepareFileBrowser() {
+        try {
+            if (fileBrowserBridge == null) fileBrowserBridge = new FileBrowserBridge((operation, path) -> {
+                File selected = AccessibleFileBrowser.mappedFile(container, path);
+                if ("shortcut".equals(operation)) {
+                    String lower = path.toLowerCase(java.util.Locale.ROOT);
+                    if (!lower.endsWith(".exe") && !lower.endsWith(".lnk"))
+                        throw new java.io.IOException("Choose an executable or Windows shortcut");
+                    return new FileBrowserBridge.Reply(0, AccessibleFileBrowser.createShortcut(container, path), null);
+                }
+                String lower = path.toLowerCase(java.util.Locale.ROOT);
+                if (!(lower.endsWith(".exe") || lower.endsWith(".msi") || lower.endsWith(".lnk") ||
+                        lower.endsWith(".bat") || lower.endsWith(".cmd")))
+                    throw new java.io.IOException("This file is not a program or installer");
+                Intent next = new Intent(this, XServerDisplayActivity.class);
+                next.putExtra("container_id", container.id);
+                next.putExtra("exec_path", selected.getPath());
+                next.putExtra("return_to_browser", true);
+                return new FileBrowserBridge.Reply(0, "Launch accepted", () ->
+                        new Handler(Looper.getMainLooper()).postDelayed(() -> replaceBrowserSession(next), 400));
+            });
+            AccessibleFileBrowser.provision(this, new File(rootFS.getRootDir().getPath() + RootFS.WINEPREFIX),
+                    fileBrowserBridge.configuration() + "favoritesPath=" + WineUtils.unixToDOSPath(
+                            new File(container.getUserDir(), "Favorites").getPath(), container) + "\n" +
+                            "launchStatus=" + getIntent().getIntExtra("browser_launch_status", 0) + "\n");
+            return "/dir " + StringUtils.escapeDOSPath(AccessibleFileBrowser.DIRECTORY) +
+                    " \"accessible-browser.exe\"" + (getIntent().getBooleanExtra("browser_resume", false) ? " --resume" : "");
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Could not prepare speaking file browser", e);
+        }
     }
 
     private void setupWineSystemFiles() {
@@ -724,7 +831,20 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             if (container.getHUDMode() == FrameRating.Mode.FULL.ordinal()) envVars.put("X11_WND_GPU_INFO", "1");
 
             String desktopName = shortcut != null || getIntent().hasExtra("exec_path") ? "nogui" : "shell";
-            String wineStartCommand = getWineStartCommand();
+            String wineStartCommand;
+            try {
+                wineStartCommand = getWineStartCommand();
+            } catch (IllegalStateException exception) {
+                android.util.Log.e("WinlatorFileBrowser", "Browser setup failed", exception);
+                runOnUiThread(() -> {
+                    preloaderDialog.closeOnUiThread();
+                    new androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle("File browser setup failed")
+                            .setMessage(exception.getMessage())
+                            .setPositiveButton(android.R.string.ok, (dialog, which) -> exit()).show();
+                });
+                return;
+            }
             // Keep built-in SAPI in Super Liam and native SAPI in its RPC helper.
             boolean directLaunchDiagnostic = wineStartCommand.toLowerCase(java.util.Locale.ROOT)
                     .contains("super liam.exe");
@@ -748,8 +868,15 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                         .matcher(wineStartCommand);
                 while (matcher.find()) launchedExecutable = FileUtils.getName(matcher.group(1));
             }
+            if (isFileBrowserSession()) launchedExecutable = "accessible-browser.exe";
             autoExitWindowClass = launchedExecutable;
+            if (getIntent().getBooleanExtra("return_to_browser", false) && launchedExecutable != null) {
+                String lower = launchedExecutable.toLowerCase(java.util.Locale.ROOT);
+                if (lower.endsWith(".msi")) launchedExecutable = "msiexec.exe";
+                else if (lower.endsWith(".bat") || lower.endsWith(".cmd")) launchedExecutable = "cmd.exe";
+            }
             guestProgramLauncherComponent.setAutoExitTargetExecutable(launchedExecutable);
+            guestProgramLauncherComponent.setMonitorProgramExit(isFileBrowserSession() || getIntent().getBooleanExtra("return_to_browser", false));
             guestSessionLog.call("Guest command: " + guestExecutable);
             if (directLaunchDiagnostic) guestSessionLog.call("Super Liam uses built-in SAPI in the game and the normal prelaunch native NVDA helper.");
 
@@ -773,7 +900,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                             .setTitle("Speech setup failed")
                             .setMessage(message)
                             .setCancelable(false)
-                            .setPositiveButton(android.R.string.ok, (dialog, which) -> exit())
+                            .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                                if (getIntent().getBooleanExtra("return_to_browser", false)) onGuestProgramEnded(1);
+                                else exit();
+                            })
                             .show();
                 }));
             }
@@ -842,9 +972,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         guestProgramLauncherComponent.setEnvVars(envVars);
         guestProgramLauncherComponent.setTerminationCallback((status) -> {
-            if (preferences.getBoolean("auto_close_container", true)) exit();
-            else if (guestSessionLog != null) guestSessionLog.call(
-                    "Guest launcher exited; automatic container close disabled by settings");
+            onGuestProgramEnded(status);
         });
         environment.addComponent(guestProgramLauncherComponent);
 
@@ -903,6 +1031,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         inputControlsView.setVisibility(View.GONE);
         rootView.addView(inputControlsView);
 
+        setupGesturePad();
+
         if (container != null && container.getHUDMode() != FrameRating.Mode.DISABLED.ordinal()) {
             frameRating = new FrameRating(this);
             frameRating.setMode(FrameRating.Mode.values()[container.getHUDMode()]);
@@ -920,6 +1050,105 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
 
         if (MainActivity.DEBUG_MODE) rootView.addView(AppUtils.createDebugMsgTextView(this));
         AppUtils.observeSoftKeyboardVisibility(drawerLayout, renderer::setScreenOffsetYRelativeToCursor);
+    }
+
+    private void setupGesturePad() {
+        gestureMaps = com.winlator.gestures.GestureSettings.open(this);
+        gestureTarget = com.winlator.gestures.GestureSettings.target(container, currentExecutablePath,
+                shortcut == null ? null : shortcut.name);
+        gestureMaps.recordLaunch(gestureTarget);
+        com.winlator.gestures.GestureRecognizer.Scheduler scheduler = com.winlator.widget.GesturePadView.scheduler();
+        gestureKeys = new com.winlator.gestures.GestureKeyDispatcher(scheduler,
+                new com.winlator.gestures.GestureKeyDispatcher.Sink() {
+                    @Override public void down(com.winlator.xserver.XKeycode key) {
+                        if (sessionStopped) return;
+                        if ((key == com.winlator.xserver.XKeycode.KEY_CTRL_L || key == com.winlator.xserver.XKeycode.KEY_CTRL_R)
+                                && preferences.getBoolean("nvda_control_interrupt", true)) nativeSpeechControl.cancel();
+                        try (com.winlator.xserver.XLock lock = xServer.lock(
+                                XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.INPUT_DEVICE)) {
+                            xServer.keyboard.setGestureKeyPress(key.id);
+                        }
+                        long elapsed = SystemClock.elapsedRealtimeNanos() - gestureRecognizedAt;
+                        gestureDeliveryCount++;
+                        gestureDeliveryNanos += elapsed;
+                        gestureDeliveryMaxNanos = Math.max(gestureDeliveryMaxNanos, elapsed);
+                        gestureLastKey = key.name();
+                    }
+                    @Override public void up(com.winlator.xserver.XKeycode key) {
+                        try (com.winlator.xserver.XLock lock = xServer.lock(
+                                XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.INPUT_DEVICE)) {
+                            xServer.keyboard.setGestureKeyRelease(key.id);
+                        }
+                    }
+                });
+        gesturePad = new com.winlator.widget.GesturePadView(this, scheduler,
+                new com.winlator.gestures.GestureRecognizer.Listener() {
+                    @Override public boolean mapped(com.winlator.gestures.Gesture gesture) {
+                        return gestureMaps.resolve(gestureTarget, gesture) != com.winlator.xserver.XKeycode.KEY_NONE;
+                    }
+                    @Override public boolean holdSwipes() { return gestureMaps.swipeHolds(gestureTarget); }
+                    @Override public void press(com.winlator.gestures.Gesture gesture, boolean hold) {
+                        gestureRecognizedAt = SystemClock.elapsedRealtimeNanos();
+                        gestureKeys.press(gestureMaps.resolve(gestureTarget, gesture), hold);
+                    }
+                    @Override public void releaseHold() { gestureKeys.releaseHold(); }
+                    @Override public void openMenu() { drawerLayout.openDrawer(GravityCompat.START); }
+                }, gestureKeys::cancel);
+        ((FrameLayout)findViewById(R.id.FLXServerDisplay)).addView(gesturePad,
+                new FrameLayout.LayoutParams(-1, -1));
+        updateGestureMode();
+    }
+
+    private void updateGestureMode() {
+        if (gesturePad == null) return;
+        boolean gestures = !isGenerateWineprefix() && com.winlator.gestures.GestureMapStore.gesturesEnabled(
+                gestureMaps.getMode(), !physicalKeyboardDevices.isEmpty());
+        boolean accepting = gestures && gestureResumed && !sessionStopped && !gestureMenuVisible && !gestureDialogOpen
+                && getWindow().getDecorView().hasWindowFocus() && !isInPictureInPictureMode();
+        gesturePad.setAccepting(accepting);
+        gesturePad.setVisibility(gestures ? View.VISIBLE : View.GONE);
+        int orientation = gestures ? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
+        if (getRequestedOrientation() != orientation) setRequestedOrientation(orientation);
+    }
+
+    /** Read-only ADB diagnostics; timing excludes recognition waits and the guest game's processing. */
+    public static String getGestureState() {
+        XServerDisplayActivity activity = activeInstance.get();
+        if (activity == null || activity.gesturePad == null || activity.sessionStopped) return "no active gesture session";
+        try {
+            org.json.JSONObject result = new org.json.JSONObject();
+            result.put("mode", activity.gestureMaps.getMode().name());
+            result.put("swipeHolds", activity.gestureMaps.swipeHolds(activity.gestureTarget));
+            result.put("physicalKeyboards", activity.physicalKeyboardDevices.size());
+            result.put("accepting", activity.gesturePad.isAccepting());
+            result.put("target", activity.gestureTarget == null ? "global" : activity.gestureTarget.id());
+            result.put("width", activity.gesturePad.getWidth()).put("height", activity.gesturePad.getHeight());
+            result.put("delivered", activity.gestureDeliveryCount).put("lastKey", activity.gestureLastKey);
+            result.put("deliveryMeanUs", activity.gestureDeliveryCount == 0 ? 0 : activity.gestureDeliveryNanos / activity.gestureDeliveryCount / 1000.0);
+            result.put("deliveryMaxUs", activity.gestureDeliveryMaxNanos / 1000.0);
+            android.view.accessibility.AccessibilityManager manager = (android.view.accessibility.AccessibilityManager)
+                    activity.getSystemService(Context.ACCESSIBILITY_SERVICE);
+            result.put("touchExploration", manager != null && manager.isTouchExplorationEnabled());
+            org.json.JSONObject map = new org.json.JSONObject();
+            for (com.winlator.gestures.Gesture gesture : com.winlator.gestures.Gesture.values())
+                map.put(gesture.name(), activity.gestureMaps.resolve(activity.gestureTarget, gesture).name());
+            return result.put("map", map).toString();
+        } catch (org.json.JSONException e) { return e.getMessage(); }
+    }
+
+    @Override public void onConfigurationChanged(@NonNull Configuration config) {
+        super.onConfigurationChanged(config);
+        if (gesturePad != null) gesturePad.cancel();
+        updateGestureMode();
+    }
+
+    public static void refreshGestureSettings() {
+        XServerDisplayActivity activity = activeInstance.get();
+        if (activity == null || activity.gestureMaps == null || activity.sessionStopped) return;
+        activity.runOnUiThread(() -> {
+            activity.gesturePad.cancel(); activity.gestureMaps.reload(); activity.updateGestureMode();
+        });
     }
 
     private void showInputControlsDialog() {
@@ -1125,7 +1354,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
         // Hardware keyboards are usable without an input-controls profile,
         // even when the device also advertises gamepad buttons.
         boolean physical = ExternalController.isPhysicalKeyboard(event.getDevice());
-        if (physical) physicalKeyboardDevices.add(event.getDeviceId());
+        if (physical && physicalKeyboardDevices.add(event.getDeviceId())) updateGestureMode();
         boolean handled;
         if (physical && shortDpadTapFilterEnabled && isDpadArrowKey(event.getKeyCode())) {
             handled = handleShortDpadTap(event);
@@ -1431,7 +1660,7 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             }
         }
 
-        if (cmdArgs.isEmpty()) cmdArgs = "/dir C:\\windows \"wfm.exe\"";
+        if (cmdArgs.isEmpty()) cmdArgs = prepareFileBrowser();
 
         if (overrideEnvVars != null && overrideEnvVars.has("EXTRA_EXEC_ARGS")) {
             cmdArgs += " "+overrideEnvVars.get("EXTRA_EXEC_ARGS");
